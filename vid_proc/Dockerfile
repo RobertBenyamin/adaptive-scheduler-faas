@@ -2,7 +2,7 @@ FROM jovanvr97/vid_proc_start
 #FROM fakhriakmal24/serverbase:1.0.0
 
 RUN pip install --upgrade pip
-RUN pip install sockets pickle-mixin requests psutil js2py JPype1 redis Flask numpy jsonpickle boto3
+RUN pip install sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis Flask numpy jsonpickle boto3
 RUN mkdir -p /app/pythonAction
 ADD runner.py /app/pythonAction/
 ADD app.py /app/pythonAction/
