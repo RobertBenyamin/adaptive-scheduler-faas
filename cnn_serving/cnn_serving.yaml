@@ -9,7 +9,7 @@ spec:
     spec:
       containerConcurrency: 1000
       containers:
-        - image: kind.local/server-cnn-serving:1.5.0
+        - image: kind.local/server-cnn-serving:1.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8081
