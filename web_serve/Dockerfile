@@ -1,6 +1,7 @@
 FROM jovanvr97/web_serve_start
 #FROM fakhriakmal24/serverbase:1.0.0
 
+RUN apt-get update && apt-get install -y build-essential
 RUN pip install sockets pickle-mixin requests psutil js2py JPype1 redis Flask numpy jsonpickle boto3
 RUN mkdir -p /app/pythonAction
 ADD runner.py /app/pythonAction/
