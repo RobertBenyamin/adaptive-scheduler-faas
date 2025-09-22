@@ -1,15 +1,6 @@
 FROM jovanvr97/vid_proc_start
 #FROM fakhriakmal24/serverbase:1.0.0
 
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    default-jdk \
-    python3-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install Python packages
-RUN pip install --upgrade pip
 RUN pip install sockets pickle-mixin requests psutil js2py JPype1 redis Flask numpy jsonpickle boto3
 RUN mkdir -p /app/pythonAction
 ADD runner.py /app/pythonAction/
