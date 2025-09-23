@@ -39,7 +39,7 @@ def lambda_func(service):
 
     # IP address of the ingress (could be LoadBalancer, NodePort, etc.)
     # use this command to get IP -> sudo kubectl get svc -n kourier-system kourier -o wide
-    target_ip = "http://10.43.48.233"  # or whatever the IP is
+    target_ip = "http://10.43.251.100"  # or whatever the IP is
 
     # Add custom Host header (virtual host routing)
     headers = {
