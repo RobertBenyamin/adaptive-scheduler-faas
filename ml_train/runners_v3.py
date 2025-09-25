@@ -437,7 +437,7 @@ def performIO(clientSocket_):
                 blob_val = file.read()
 
             lockCache.acquire()
-            valueTable[my_id] = blob_valf
+            valueTable[my_id] = blob_val
             checkTable[blobName].remove(my_id)
             for elem in checkTable[blobName]:
                 mapPIDtoIO[elem].set()
