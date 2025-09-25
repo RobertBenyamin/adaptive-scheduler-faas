@@ -61,7 +61,7 @@ To run this repository, you'll need a cluster with a minimum of two nodes: one *
     sudo kubectl patch configmap/config-domain \
     -n knative-serving \
     --type merge \
-    -p '{"data":{"172.31.30.248.sslip.io":""}}' // ip master
+    -p '{"data":{"172.31.30.118.sslip.io":""}}' // ip master
     ```
 
 5.  **Build Application Image on Slave Nodes**
