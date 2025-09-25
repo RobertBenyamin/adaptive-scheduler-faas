@@ -22,6 +22,13 @@ To run this repository, you'll need a cluster with a minimum of two nodes: one *
     curl -sfL https://get.k3s.io | sh -s - --docker
     ```
 
+    Run the following command on your master node to install KNative CLI:
+    ```bash
+    wget https://github.com/knative/client/releases/download/knative-v1.9.1/kn-linux-amd64
+    sudo mv kn-linux-amd64 /usr/local/bin/kn
+    sudo chmod +x /usr/local/bin/kn
+    ```
+
 2.  **Get the K3s Cluster Token:**
     Find your cluster token, which is required to add slave nodes. You can learn more about K3s tokens [here](https://docs.k3s.io/cli/token).
 
@@ -36,35 +43,7 @@ To run this repository, you'll need a cluster with a minimum of two nodes: one *
     curl -sfL https://get.k3s.io | K3S_URL=https://<master_ip_address>:6443 K3S_TOKEN=<node_token> sh -s - --docker
     ```
 
-4.  **Install KNative at Slave Node:**
-    Do following things to install KNative
-
-    ```bash 
-    # Install the required custom resources by running the command:
-    sudo kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-crds.yaml
-
-    # Install the core components of Knative Serving by running the command:
-    sudo kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-core.yaml
-
-    # Install the Knative Kourier controller by running the command: 
-    sudo kubectl apply -f https://github.com/knative/net-kourier/releases/download/knative-v1.9.1/kourier.yaml
-
-    # Configure Knative Serving to use Kourier by default by running the command: 
-    sudo kubectl patch configmap/config-network \
-    --namespace knative-serving \
-    --type merge \
-    --patch '{"data":{"ingress-class":"kourier.ingress.networking.knative.dev"}}'
-    
-    # Configure DNS
-    sudo kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-default-domain.yaml
-
-    sudo kubectl patch configmap/config-domain \
-    -n knative-serving \
-    --type merge \
-    -p '{"data":{"172.31.30.118.sslip.io":""}}' // ip master
-    ```
-
-5.  **Build Application Image on Slave Nodes**
+4.  **Build Application Image on Slave Nodes**
     The application image needs to be built on each slave node. Execute the build.sh script to create the necessary image for the evaluation.
 
     ```bash
@@ -82,12 +61,28 @@ To run this repository, you'll need a cluster with a minimum of two nodes: one *
       * `AWS_SECRET_ACCESS_KEY`
       * `AWS_DEFAULT_REGION`
 
-2.  **Install Knative and Start Evaluation at Master:**
-    Once your cluster and remote storage are ready, execute the `start.sh` script to install Knative and begin the evaluation.
-
+2.  **Install Knative infrastructure:**
+    Before running the script, open `deploy_only.sh` and update it with the private IP address of your master node.
     ```bash
-    ./start.sh
+    ./deploy_only.sh
     ```
+
+3.  **Deploy Applications**
+    ```bash
+    ./deploy_app.sh
+    ```
+
+4.  **Install Neccessary Python Package**
+    ```bash
+    sudo apt install python3-numpy python3-requests -y
+    ```
+
+5.  **Start Evaluation**
+    ```bash
+    python3 knative.py
+    ```
+
+    The result will be stored on `run-all-out.txt`
 
 -----
 
