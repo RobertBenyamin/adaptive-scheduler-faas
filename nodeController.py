@@ -13,7 +13,7 @@ import logging
 
 # CPU_NUM is the maximum number of cores we can use
 # NODE_MAX is the maximum number of nodes we can use (SET NODE_MAX = 1 if we want to do simulation on one node)
-CPU_NUM = 16
+CPU_NUM = 8
 NODE_MAX = 1
 
 # map physical cores to function owners

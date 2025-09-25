@@ -14,10 +14,10 @@ spec:
             - containerPort: 8081
           resources:
             requests:
-              cpu: 500m
-              memory: 640M
+              cpu: 250m
+              memory: 512M
             limits:
-              cpu: 1
+              cpu: 500m
     metadata:
       annotations:
         autoscaling.knative.dev/target: "1000"

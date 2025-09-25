@@ -11,31 +11,32 @@ from storage_helper import download_file, upload_file
 
 current_path = "/app/pythonAction"
 
+
 def signal_handler(sig, frame):
     serverSocket_.close()
     sys.exit(0)
 
 
 class PrintHook:
-    def __init__(self,out=1):
+    def __init__(self, out=1):
         self.func = None
         self.origOut = None
         self.out = out
 
-    def TestHook(self,text):
-        f = open('hook_log.txt','a')
+    def TestHook(self, text):
+        f = open('hook_log.txt', 'a')
         f.write(text)
         f.close()
-        return 0,0,text
+        return 0, 0, text
 
-    def Start(self,func=None):
+    def Start(self, func=None):
         if self.out:
             sys.stdout = self
             self.origOut = sys.__stdout__
         else:
-            sys.stderr= self
+            sys.stderr = self
             self.origOut = sys.__stderr__
-            
+
         if func:
             self.func = func
         else:
@@ -51,13 +52,13 @@ class PrintHook:
 
     def flush(self):
         self.origOut.flush()
-  
-    def write(self,text):
+
+    def write(self, text):
         proceed = 1
         lineNo = 0
         addText = ''
         if self.func != None:
-            proceed,lineNo,newText = self.func(text)
+            proceed, lineNo, newText = self.func(text)
         if proceed:
             if text.split() == []:
                 self.origOut.write(text)
@@ -67,17 +68,20 @@ class PrintHook:
                         try:
                             raise "Dummy"
                         except:
-                            codeObject = sys.exc_info()[2].tb_frame.f_back.f_code
+                            codeObject = sys.exc_info(
+                            )[2].tb_frame.f_back.f_code
                             fileName = codeObject.co_filename
-                            funcName = codeObject.co_name     
+                            funcName = codeObject.co_name
                 self.origOut.write(newText)
 
+
 def MyHookOut(text):
-    return 1,1,' -- pid -- '+ str(os.getpid()) + ' ' + text
+    return 1, 1, ' -- pid -- ' + str(os.getpid()) + ' ' + text
+
 
 # Global variables
-serverSocket_ = None # serverSocket
-actionModule = None # action module
+serverSocket_ = None  # serverSocket
+actionModule = None  # action module
 
 checkTable = {}
 mapPIDtoLeader = {}
@@ -87,22 +91,22 @@ mapPIDtoIO = {}
 lockCache = threading.Lock()
 
 lockPIDMap = threading.Lock()
-requestQueue = [] # queue of child processes
-mapPIDtoStatus = {} # map from pid to status (running, waiting)
+requestQueue = []  # queue of child processes
+mapPIDtoStatus = {}  # map from pid to status (running, waiting)
 
-responseMapWindows = [] # map from pid to response
+responseMapWindows = []  # map from pid to response
 
-affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 
-# The function to update the core nums by request. 
+# The function to update the core nums by request.
 def updateThread():
     # Shared vaiable: numCores
     global numCores
 
     # Bind to 0.0.0.0:5500
     myHost = '0.0.0.0'
-    myPort = 5500 
+    myPort = 5500
 
     # Create a socket
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -118,7 +122,7 @@ def updateThread():
         dataStr = data_.decode('UTF-8')
         dataStrList = dataStr.splitlines()
         message = json.loads(dataStrList[-1])
-        
+
         # Get the numCores and update the global variable
         numCores = message["numCores"]
         result = {"Response": "Ok"}
@@ -131,13 +135,15 @@ def updateThread():
             'Connection': 'close',
         }
 
-        response_headers_raw = ''.join('%s: %s\r\n' % (k, v) for k, v in response_headers.items())
+        response_headers_raw = ''.join('%s: %s\r\n' % (
+            k, v) for k, v in response_headers.items())
 
         response_proto = 'HTTP/1.1'
         response_status = '200'
         response_status_text = 'OK'
 
-        r = '%s %s %s\r\n' % (response_proto, response_status, response_status_text)
+        r = '%s %s %s\r\n' % (
+            response_proto, response_status, response_status_text)
 
         clientSocket.send(r.encode(encoding="utf-8"))
         clientSocket.send(response_headers_raw.encode(encoding="utf-8"))
@@ -146,10 +152,11 @@ def updateThread():
 
         clientSocket.close()
 
+
 def myFunction(data_, clientSocket_):
     global actionModule
     global numCores
-    
+
     dataStr = data_.decode('UTF-8')
     dataStrList = dataStr.splitlines()
     numCoreFlag = False
@@ -170,31 +177,32 @@ def myFunction(data_, clientSocket_):
         result["myPID"] = os.getpid()
         msg = json.dumps(result)
 
-        
     response_headers = {
         'Content-Type': 'text/html; encoding=utf8',
         'Content-Length': len(msg),
         'Connection': 'close',
     }
 
-    response_headers_raw = ''.join('%s: %s\r\n' % (k, v) for k, v in response_headers.items())
+    response_headers_raw = ''.join('%s: %s\r\n' % (k, v)
+                                   for k, v in response_headers.items())
 
     response_proto = 'HTTP/1.1'
     response_status = '200'
-    response_status_text = 'OK' # this can be random
+    response_status_text = 'OK'  # this can be random
 
     # sending all this stuff
-    r = '%s %s %s\r\n' % (response_proto, response_status, response_status_text)
+    r = '%s %s %s\r\n' % (response_proto, response_status,
+                          response_status_text)
     try:
         clientSocket_.send(r.encode(encoding="utf-8"))
         clientSocket_.send(response_headers_raw.encode(encoding="utf-8"))
-        clientSocket_.send('\r\n'.encode(encoding="utf-8")) # to separate headers from body
+        # to separate headers from body
+        clientSocket_.send('\r\n'.encode(encoding="utf-8"))
         clientSocket_.send(msg.encode(encoding="utf-8"))
         print("application finish")
     except:
         clientSocket_.close()
     clientSocket_.close()
-
 
 
 def waitTermination(childPid):
@@ -212,7 +220,7 @@ def waitTermination(childPid):
         pass
     for index in range(len(requestQueue)):
         # Find the first waiting child process and run it.
-        if(mapPIDtoStatus[requestQueue[index]] == "waiting"):
+        if (mapPIDtoStatus[requestQueue[index]] == "waiting"):
             mapPIDtoStatus[requestQueue[index]] = "running"
             try:
                 os.kill(requestQueue[index], signal.SIGCONT)
@@ -220,6 +228,7 @@ def waitTermination(childPid):
             except:
                 pass
     lockPIDMap.release()
+
 
 def performIO(clientSocket_):
     global mapPIDtoStatus
@@ -236,15 +245,15 @@ def performIO(clientSocket_):
 
     while True:
         dataStrList = dataStr.splitlines()
-        
-        message = None   
+
+        message = None
         try:
             message = json.loads(dataStrList[-1])
             break
         except:
             data_ += clientSocket_.recv(1024)
             dataStr = data_.decode('UTF-8')
-    
+
     operation = message["operation"]
     blobName = message["blobName"]
     blockedID = message["pid"]
@@ -265,7 +274,7 @@ def performIO(clientSocket_):
                 except:
                     pass
     lockPIDMap.release()
-    
+
     if operation == "get":
         lockCache.acquire()
         if blobName in checkTable:
@@ -295,7 +304,7 @@ def performIO(clientSocket_):
             download_file(blobName, f"{current_path}/{blobName}")
             with open(f"{current_path}/{blobName}", "rb") as file:
                 blob_val = file.read()
-            
+
             lockCache.acquire()
             valueTable[my_id] = blob_val
             checkTable[blobName].remove(my_id)
@@ -305,19 +314,20 @@ def performIO(clientSocket_):
             lockCache.release()
 
         full_blob_name = blobName.split(".")
-        proc_blob_name = full_blob_name[0] + "_" + str(blockedID) + "." + full_blob_name[1]
+        proc_blob_name = full_blob_name[0] + "_" + \
+            str(blockedID) + "." + full_blob_name[1]
         with open(proc_blob_name, "wb") as my_blob:
             my_blob.write(blob_val)
     else:
         fReadname = message["value"]
-        fRead = open(fReadname,"rb")
+        fRead = open(fReadname, "rb")
         value = fRead.read()
         # blob_client.upload_blob(value, overwrite=True)
         upload_file(f"{current_path}/{value}", f"files/{blobName}")
         blob_val = "none"
 
     lockPIDMap.acquire()
-    numRunning = 0 # number of running processes
+    numRunning = 0  # number of running processes
     for child in mapPIDtoStatus.copy():
         if mapPIDtoStatus[child] == "running":
             numRunning += 1
@@ -329,7 +339,7 @@ def performIO(clientSocket_):
         os.kill(blockedID, signal.SIGSTOP)
     lockPIDMap.release()
 
-    messageToRet = json.dumps({"value":"OK"})
+    messageToRet = json.dumps({"value": "OK"})
     try:
         os.kill(blockedID, signal.SIGCONT)
     except:
@@ -340,6 +350,7 @@ def performIO(clientSocket_):
     except:
         pass
     # clientSocket_.close()
+
 
 def IOThread():
     myHost = '0.0.0.0'
@@ -354,10 +365,11 @@ def IOThread():
         (clientSocket, _) = serverSocket.accept()
         threading.Thread(target=performIO, args=(clientSocket,)).start()
 
+
 def run():
-    # serverSocket_: socket 
+    # serverSocket_: socket
     # actionModule:  the module to execute
-    # requestQueue: 
+    # requestQueue:
     # mapPIDtoStatus: store status for each process (waiting / running)
     global serverSocket_
     global actionModule
@@ -367,7 +379,7 @@ def run():
     global responseMapWindows
     global affinity_mask
     # Set the core of mxcontainer
-    numCores = 16
+    numCores = 8
     os.sched_setaffinity(0, affinity_mask)
 
     print("Welcome... ", numCores)
@@ -383,7 +395,7 @@ def run():
     serverSocket.listen(1)
 
     # serverSocket_ = serverSocket
-    
+
     # Set actionModule
     import app
     actionModule = app
@@ -395,7 +407,6 @@ def run():
     phOut = PrintHook()
     phOut.Start(MyHookOut)
 
-
     # Monitor numCore update
     threadUpdate = threading.Thread(target=updateThread)
     threadUpdate.start()
@@ -405,11 +416,11 @@ def run():
     threadIntercept.start()
 
     # If a request come, then fork.
-    while(True):
-        
+    while (True):
+
         (clientSocket, address) = serverSocket.accept()
         print("Accept a new connection from %s" % str(address), flush=True)
-        
+
         data_ = b''
 
         data_ += clientSocket.recv(1024)
@@ -423,19 +434,23 @@ def run():
                 'Content-Length': len(msg),
                 'Connection': 'close',
             }
-            response_headers_raw = ''.join('%s: %s\r\n' % (k, v) for k, v in response_headers.items())
+            response_headers_raw = ''.join('%s: %s\r\n' % (
+                k, v) for k, v in response_headers.items())
 
             response_proto = 'HTTP/1.1'
             response_status = '200'
-            response_status_text = 'OK' # this can be random
+            response_status_text = 'OK'  # this can be random
 
             # sending all this stuff
-            r = '%s %s %s\r\n' % (response_proto, response_status, response_status_text)
+            r = '%s %s %s\r\n' % (
+                response_proto, response_status, response_status_text)
             print(r)
             try:
                 clientSocket.send(r.encode(encoding="utf-8"))
-                clientSocket.send(response_headers_raw.encode(encoding="utf-8"))
-                clientSocket.send('\r\n'.encode(encoding="utf-8")) # to separate headers from body
+                clientSocket.send(
+                    response_headers_raw.encode(encoding="utf-8"))
+                # to separate headers from body
+                clientSocket.send('\r\n'.encode(encoding="utf-8"))
                 clientSocket.send(msg.encode(encoding="utf-8"))
                 clientSocket.close()
                 continue
@@ -445,15 +460,15 @@ def run():
 
         while True:
             dataStrList = dataStr.splitlines()
-            
-            message = None   
+
+            message = None
             try:
                 message = json.loads(dataStrList[-1])
                 break
             except:
                 data_ += clientSocket.recv(1024)
                 dataStr = data_.decode('UTF-8')
-        
+
         responseFlag = False
         if message != None:
 
@@ -473,7 +488,7 @@ def run():
                     if responseTime[1][1] != -1:
                         i.append(responseTime[1][1] - responseTime[1][0])
                 if len(i) == 0:
-                    result={"p95": 0}
+                    result = {"p95": 0}
                 else:
                     result = {"p95": np.percentile(i, 95)}
                 result["affinity_mask"] = list(affinity_mask)
@@ -483,31 +498,32 @@ def run():
 
             if "Clear" in message:
                 responseMapWindows = []
-                
+
         if responseFlag == True:
             response_headers = {
                 'Content-Type': 'text/html; encoding=utf8',
                 'Content-Length': len(msg),
                 'Connection': 'close',
             }
-            response_headers_raw = ''.join('%s: %s\r\n' % (k, v) for k, v in response_headers.items())
+            response_headers_raw = ''.join('%s: %s\r\n' % (
+                k, v) for k, v in response_headers.items())
 
             response_proto = 'HTTP/1.1'
             response_status = '200'
-            response_status_text = 'OK' # this can be random
+            response_status_text = 'OK'  # this can be random
 
             # sending all this stuff
-            r = '%s %s %s\r\n' % (response_proto, response_status, response_status_text)
+            r = '%s %s %s\r\n' % (
+                response_proto, response_status, response_status_text)
 
             clientSocket.send(r.encode(encoding="utf-8"))
             clientSocket.send(response_headers_raw.encode(encoding="utf-8"))
-            clientSocket.send('\r\n'.encode(encoding="utf-8")) # to separate headers from body
+            # to separate headers from body
+            clientSocket.send('\r\n'.encode(encoding="utf-8"))
             clientSocket.send(msg.encode(encoding="utf-8"))
             clientSocket.close()
             print("completed API")
             continue
-
-
 
         # a status mark of whether the process can run based on the free resources
         waitForRunning = False
@@ -520,10 +536,10 @@ def run():
             if mapPIDtoStatus[child] == "running":
                 numIsRunning += 1
         if numIsRunning >= numCores:
-            waitForRunning = True # The process need to wait for resources
+            waitForRunning = True  # The process need to wait for resources
 
         # slide windows
-        if len(responseMapWindows) >=100:
+        if len(responseMapWindows) >= 100:
             responseMapWindows.pop(0)
 
         childProcess = os.fork()
@@ -543,12 +559,14 @@ def run():
             else:
                 # If there are free resources (cpu core) for the process to run, then we let the childprocess to run.
                 mapPIDtoStatus[childProcess] = "running"
-            
+
             requestQueue.append(childProcess)
             lockPIDMap.release()
             # The childprocess is running, when it is finished, let the queue find waiting childprocesses
-            threadWait = threading.Thread(target=waitTermination, args=(childProcess,))
+            threadWait = threading.Thread(
+                target=waitTermination, args=(childProcess,))
             threadWait.start()
+
 
 if __name__ == "__main__":
     # main program
