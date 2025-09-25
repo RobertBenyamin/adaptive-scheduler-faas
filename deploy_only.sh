@@ -14,11 +14,11 @@ sudo kubectl patch configmap/config-network \
   --namespace knative-serving \
   --type merge \
   --patch '{"data":{"ingress-class":"kourier.ingress.networking.knative.dev"}}'
- 
+
 # Configure DNS
 sudo kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-default-domain.yaml
 
 sudo kubectl patch configmap/config-domain \
   -n knative-serving \
   --type merge \
-  -p '{"data":{"172.31.30.118.sslip.io":""}}'
+  -p '{"data":{"172.31.30.118.sslip.io":""}}' # Private IP Master Node
