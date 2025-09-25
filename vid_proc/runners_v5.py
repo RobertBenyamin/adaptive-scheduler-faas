@@ -111,7 +111,7 @@ mapPIDtoStatus = {}  # map from pid to status (running, waiting)
 processArrivalTimes = {}  # Dictionary to track arrival times of processes
 responseMapWindows = []  # map from pid to response
 
-affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
+affinity_mask = {0, 1}
 
 
 # The function to update the core nums by request.
@@ -640,7 +640,7 @@ def run():
     global processStartTime
 
     # Set the core of mxcontainer
-    numCores = 8
+    numCores = 2
     os.sched_setaffinity(0, affinity_mask)
 
     print("Welcome... ", numCores)
