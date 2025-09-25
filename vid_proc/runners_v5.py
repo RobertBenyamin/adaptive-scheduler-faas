@@ -14,7 +14,6 @@ from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 import heapq
 
-
 current_path = "/app/pythonAction"
 BETA = 0.3  # Weight for wait time
 processQueue = []
@@ -297,7 +296,7 @@ def calculate_remaining_time(pid):
     # 5. Hitung Estimasi Burst Time dengan Mitigasi Ketidakpastian
     tsi = (avg_burst_time + ewma_burst_time + lin_pred +
            rf_pred) / 4  # Rata-rata dari semua metode
-    tsu = max(tsi - std_dev, 0)   # Mitigasi ketidakpastian
+    tsu = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)  # Mitigasi ketidakpastian
 
     # 6. Hitung waktu yang sudah berjalan
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
