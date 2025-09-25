@@ -21,4 +21,4 @@ sudo kubectl apply -f https://github.com/knative/serving/releases/download/knati
 sudo kubectl patch configmap/config-domain \
   -n knative-serving \
   --type merge \
-  -p '{"data":{"52.72.211.102.sslip.io":""}}'
+  -p '{"data":{"172.31.30.118.sslip.io":""}}'
