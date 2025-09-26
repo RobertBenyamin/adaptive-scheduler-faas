@@ -199,6 +199,7 @@ def myFunction(data_, clientSocket_):
         # to separate headers from body
         clientSocket_.send('\r\n'.encode(encoding="utf-8"))
         clientSocket_.send(msg.encode(encoding="utf-8"))
+        print("application finish")
     except:
         clientSocket_.close()
     clientSocket_.close()
@@ -299,11 +300,11 @@ def performIO(clientSocket_):
             checkTable[blobName].append(my_id)
             lockCache.release()
             # blob_val = (blob_client.download_blob()).readall()
-            blob_storage = blobName.split("_")[0]
-            download_file(f"files/{blob_storage}",
-                          f"{current_path}/{blobName}")
+            # blob_storage = blobName.split("_")[0]
+            download_file(blobName, f"{current_path}/{blobName}")
             with open(f"{current_path}/{blobName}", "rb") as file:
                 blob_val = file.read()
+
             lockCache.acquire()
             valueTable[my_id] = blob_val
             checkTable[blobName].remove(my_id)
@@ -394,7 +395,10 @@ def run():
     serverSocket.listen(1)
 
     # serverSocket_ = serverSocket
-    print("checkpoint 1")
+
+    # Set actionModule
+    import app
+    actionModule = app
 
     # Set the signal handler
     signal.signal(signal.SIGINT, signal_handler)
@@ -410,11 +414,6 @@ def run():
     # Monitor I/O Block
     threadIntercept = threading.Thread(target=IOThread)
     threadIntercept.start()
-
-    # Set actionModule
-    import app
-    actionModule = app
-    print("checkpoint 2")
 
     # If a request come, then fork.
     while (True):
@@ -445,6 +444,7 @@ def run():
             # sending all this stuff
             r = '%s %s %s\r\n' % (
                 response_proto, response_status, response_status_text)
+            print(r)
             try:
                 clientSocket.send(r.encode(encoding="utf-8"))
                 clientSocket.send(
@@ -522,6 +522,7 @@ def run():
             clientSocket.send('\r\n'.encode(encoding="utf-8"))
             clientSocket.send(msg.encode(encoding="utf-8"))
             clientSocket.close()
+            print("completed API")
             continue
 
         # a status mark of whether the process can run based on the free resources
@@ -565,7 +566,6 @@ def run():
             threadWait = threading.Thread(
                 target=waitTermination, args=(childProcess,))
             threadWait.start()
-    return "Request accepted...."
 
 
 if __name__ == "__main__":
