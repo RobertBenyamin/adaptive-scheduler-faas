@@ -171,6 +171,7 @@ def myFunction(data_, clientSocket_):
     dataStr = data_.decode('UTF-8')
     dataStrList = dataStr.splitlines()
     numCoreFlag = False
+    message = None
     try:
         message = json.loads(dataStrList[-1])
         numCores = int(message["numCores"])
@@ -182,7 +183,7 @@ def myFunction(data_, clientSocket_):
 
     # Set the main function
     if numCoreFlag == False:
-        result = actionModule.lambda_handler()
+        result = actionModule.lambda_handler(message)
 
         # Send the result (Test Pid)
         result["myPID"] = os.getpid()
