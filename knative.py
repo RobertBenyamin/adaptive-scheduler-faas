@@ -1,3 +1,4 @@
+import random
 import subprocess
 import time
 import numpy as np
@@ -33,7 +34,17 @@ for line in lines:
 for serviceName in serviceNames:
     services.append(getUrlByFuncName(serviceName))
 
-def lambda_func(service):
+# These files must be uploaded to your S3 bucket.
+TEST_DATA_CONFIG = {
+    "cnn-serving": [f"img{i}.jpg" for i in range(1, 41)],
+    "img-rot":     [f"img{i}.jpg" for i in range(1, 41)],
+    "img-res":     [f"img{i}.jpg" for i in range(1, 41)],
+    "vid-proc":    [f"vid{i}.mp4" for i in range(1, 2)],
+    "ml-train":    ["minioDataset.csv"],
+    "web-serve":   ["money.txt"]
+}
+
+def lambda_func(service, service_name):
     global times
     t1 = time.time()
 
@@ -47,8 +58,21 @@ def lambda_func(service):
         "Content-Type": "application/json"
     }
 
+    # Create payload based on service
+    payload = {}
+    if service_name in TEST_DATA_CONFIG:
+        # Get the list of possible input files for the current service
+        possible_inputs = TEST_DATA_CONFIG[service_name]
+        # Choose one randomly
+        input_file = random.choice(possible_inputs)
+        # Use a generic key like "input_file" in the payload
+        payload = {"input_file": input_file}
+    else:
+        # Default payload if service is not in our config
+        payload = {"name": "test"}
+
     # Perform POST to the IP, but override the Host header
-    r = requests.post(target_ip, headers=headers, json={"name": "test"})
+    r = requests.post(target_ip, headers=headers, json=payload)
 
     print(r.text)
     t2 = time.time()
@@ -90,6 +114,9 @@ for load in loads:
         times = []
         after_time, before_time = 0, 0
 
+        # Get the service name from the service URL
+        current_service_name = serviceNames[services.index(service)]
+
         st = 0
         for t in instance_events:
             st = st + t - (after_time - before_time)
@@ -97,7 +124,7 @@ for load in loads:
             if st > 0:
                 time.sleep(st)
 
-            threadToAdd = threading.Thread(target=lambda_func, args=(service, ))
+            threadToAdd = threading.Thread(target=lambda_func, args=(service, current_service_name))
             threads.append(threadToAdd)
             threadToAdd.start()
             after_time = time.time()
