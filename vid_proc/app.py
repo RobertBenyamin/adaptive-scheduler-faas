@@ -10,8 +10,8 @@ vid_name = 'vid1.mp4'
 
 result_file_path = tmp + vid_name
 
-def lambda_handler():
-    blobName = "vid1.mp4"
+def lambda_handler(event):
+    blobName = event.get("input_file", "vid1.mp4")
     # dnld_blob.download_blob_new(blobName)
     download_file(blobName, f"{current_path}/{blobName}")
     video = cv2.VideoCapture("vid1_"+str(os.getpid())+".mp4")

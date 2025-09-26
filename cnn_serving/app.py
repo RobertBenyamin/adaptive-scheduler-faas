@@ -2,9 +2,7 @@ from mxnet import gluon
 import os
 import mxnet as mx
 from PIL import Image
-from storage_helper import download_file, upload_file
-import dnld_blob
-
+from storage_helper import download_file
 
 current_path = "/app/pythonAction"
 
@@ -14,11 +12,8 @@ lblPath = gluon.utils.download('https://github.com/shicai/MobileNet-Caffe/blob/m
 with open(lblPath, 'r') as f:
     labels = [l.rstrip() for l in f]
 
-def lambda_handler():
-    blobName = "img10.jpg"    
-    # dnld_blob.download_blob_new(blobName)
-    # full_blob_name = blobName.split(".")
-    # proc_blob_name = full_blob_name[0] + "_" + str(os.getpid()) + "." + full_blob_name[1]
+def lambda_handler(event):
+    blobName = event.get("input_file", "img10.jpg")
     download_file(blobName, f"{current_path}/{blobName}")
     image = Image.open(f"{current_path}/{blobName}")
     image.save(f'{current_path}/tempImage_'+str(os.getpid())+'.jpeg')
@@ -38,6 +33,6 @@ def lambda_handler():
     for i in idx:
         i = int(i.asscalar())
         # print('With prob = %.5f, it contains %s' % (prob[0,i].asscalar(), labels[i]))
-        # inference = inference + 'With prob = %.5f, it contains %s' % (prob[0,i].asscalar(), labels[i]) + '. '
-        inference = inference + 'With prob = %.5f, it contains ' % (prob[0,i].asscalar()) + '. '
+        inference = inference + 'With prob = %.5f, it contains %s' % (prob[0,i].asscalar(), labels[i]) + '. '
+        # inference = inference + 'With prob = %.5f, it contains ' % (prob[0,i].asscalar()) + '. '
     return {"result = ":inference}

@@ -6,7 +6,6 @@ from sklearn.linear_model import LogisticRegression
 import pandas as pd
 import re
 import warnings
-import dnld_blob
 from storage_helper import download_file, upload_file
 
 warnings.filterwarnings("ignore")
@@ -23,14 +22,12 @@ def cleanup(sentence):
 
 df_name = 'minioDataset.csv'
 
-def lambda_handler():
+def lambda_handler(event):
 
     t1 = time.time()
-    blobName = df_name
-    # dnld_blob.download_blob_new(blobName)
+    blobName = event.get("input_file", df_name)
     download_file(blobName, f"{current_path}/{blobName}")
-    full_blob_name = df_name.split(".")
-    proc_blob_name = full_blob_name[0] + "_" + str(os.getpid()) + "." + full_blob_name[1]
+    
     t2 = time.time()
     print("Time 1 = " + str(t2-t1))
 
@@ -47,9 +44,7 @@ def lambda_handler():
     filename = 'finalized_model_'+str(os.getpid())+'.sav'
     pickle.dump(model, open(filename, 'wb'))
 
-    fReadName = 'finalized_model_'+str(os.getpid())+'.sav'
     blobName = 'finalized_model_'+str(os.getpid())+'.sav'
-    # dnld_blob.upload_blob_new(blobName, fReadName)
     upload_file(f"{current_path}/{blobName}", blobName)
     t4 = time.time()
     print("Time 3 = " + str(t4-t3))
