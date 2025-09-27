@@ -18,7 +18,7 @@ def lambda_handler(event):
     im1 = image.crop((left, top, right, bottom))
     im1.save('tempImage_'+str(os.getpid())+'.jpeg')
 
-    blobName = "img10_res.jpg"
+    blobName = "resized-"+blobName
     upload_file(f"{current_path}/{blobName}", blobName)
 
     return {"Image":"resized"}

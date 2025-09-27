@@ -14,7 +14,7 @@ def lambda_handler(event):
     img = image.transpose(Image.ROTATE_90)
     img.save('tempImage_'+str(os.getpid())+'.jpeg')
 
-    blobName = "img10_rot.jpg"
+    blobName = "rotated-"+blobName
     upload_file(f"{current_path}/{blobName}", blobName)
     
     return {"Image":"rotated"}

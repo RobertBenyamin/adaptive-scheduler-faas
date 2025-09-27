@@ -16,7 +16,6 @@ def lambda_handler(event):
     new_file.write(str(money))
     new_file.close()
 
-    blobName = "money.txt"
     upload_file(f"{current_path}/{blobName}", blobName)
 
     return {"Money":"withdrawn"}

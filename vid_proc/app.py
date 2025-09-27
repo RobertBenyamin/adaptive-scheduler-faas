@@ -1,6 +1,5 @@
 import os
 import cv2
-import dnld_blob
 from storage_helper import download_file, upload_file
 
 tmp = "/tmp/"
@@ -33,9 +32,7 @@ def lambda_handler(event):
         else:
             break
 
-    fReadname = 'output_'+str(os.getpid())+'.avi'
-    blobName = "output.avi"
-    # dnld_blob.upload_blob_new(blobName, fReadname)
+    blobName = 'output_'+str(os.getpid())+'.avi'
     upload_file(f"{current_path}/{blobName}", blobName)
 
     video.release()
