@@ -10,7 +10,7 @@ from statistics import mean, median,variance,stdev
 
 # IP address of the ingress (could be LoadBalancer, NodePort, etc.)
 # use this command to get IP -> sudo kubectl get svc -n kourier-system kourier -o wide
-# python3 knative.py --target_ip http://10.43.251.105
+# python3 knative.py --target_ip 10.43.251.105
 parser = argparse.ArgumentParser()
 parser.add_argument('--target_ip', type=str, default="10.43.251.105", help='Ingress IP address only (e.g., 10.43.251.105)')
 args = parser.parse_args()
