@@ -184,7 +184,7 @@ def create_pivot_table(detailed_df):
         }
         
         # Calculate statistics for each load type
-        for load_type in sorted(load_types):  # Sort to ensure consistent order
+        for load_type in (load_types):  # Sort to ensure consistent order
             load_data = service_data[service_data['Load_Type'] == load_type]['Timing_Value']
             
             if len(load_data) > 0:
