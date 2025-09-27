@@ -1,3 +1,4 @@
+import argparse
 import random
 import subprocess
 import time
@@ -5,6 +6,15 @@ import numpy as np
 import threading
 import requests
 from statistics import mean, median,variance,stdev
+
+
+# IP address of the ingress (could be LoadBalancer, NodePort, etc.)
+# use this command to get IP -> sudo kubectl get svc -n kourier-system kourier -o wide
+# python3 knative.py --target_ip http://10.43.251.105
+parser = argparse.ArgumentParser()
+parser.add_argument('--target_ip', type=str, default="http://10.43.251.105")
+args = parser.parse_args()
+target_ip = args.target_ip
 
 # get the url of a function
 def getUrlByFuncName(funcName):
@@ -47,10 +57,6 @@ TEST_DATA_CONFIG = {
 def lambda_func(service, service_name):
     global times
     t1 = time.time()
-
-    # IP address of the ingress (could be LoadBalancer, NodePort, etc.)
-    # use this command to get IP -> sudo kubectl get svc -n kourier-system kourier -o wide
-    target_ip = "http://10.43.251.105"  # or whatever the IP is
 
     # Add custom Host header (virtual host routing)
     headers = {
