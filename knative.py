@@ -49,9 +49,9 @@ TEST_DATA_CONFIG = {
     "cnn-serving": [f"img{i}.jpg" for i in range(1, 41)],
     "img-rot":     [f"img{i}.jpg" for i in range(1, 41)],
     "img-res":     [f"img{i}.jpg" for i in range(1, 41)],
-    "vid-proc":    [f"vid{i}.mp4" for i in range(1, 2)],
-    "ml-train":    ["minioDataset.csv"],
-    "web-serve":   ["money.txt"]
+    "vid-proc":    [f"vid{i}.mp4" for i in range(1, 15)],
+    "ml-train":    [f"dataset{i}.csv" for i in range(1, 21)],
+    "web-serve":   [f"account{i}.txt" for i in range(1, 11)],
 }
 
 def lambda_func(service, service_name):
