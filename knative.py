@@ -12,9 +12,9 @@ from statistics import mean, median,variance,stdev
 # use this command to get IP -> sudo kubectl get svc -n kourier-system kourier -o wide
 # python3 knative.py --target_ip http://10.43.251.105
 parser = argparse.ArgumentParser()
-parser.add_argument('--target_ip', type=str, default="http://10.43.251.105")
+parser.add_argument('--target_ip', type=str, default="10.43.251.105", help='Ingress IP address only (e.g., 10.43.251.105)')
 args = parser.parse_args()
-target_ip = args.target_ip
+target_ip = f"http://{args.target_ip}"
 
 # get the url of a function
 def getUrlByFuncName(funcName):
