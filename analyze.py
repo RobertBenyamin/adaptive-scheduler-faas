@@ -1,3 +1,4 @@
+import argparse
 import pandas as pd
 import re
 import numpy as np
@@ -240,6 +241,11 @@ def debug_parsing(text_data):
         print("---")
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--output_file', type=str, default='output.xlsx', help='Output Excel file name')
+    args = parser.parse_args()
+    output_file = args.output_file
+
     # Read data
     with open('run-all-out.txt', 'r') as f:
         text_data = f.read()
@@ -259,7 +265,6 @@ def main():
     pivot_tables = create_pivot_table(detailed_df)
     
     # Save to Excel
-    output_file = 'performance_analysis.xlsx'
     print(f"Saving results to {output_file}...")
     
     with pd.ExcelWriter(output_file, engine='openpyxl') as writer:
