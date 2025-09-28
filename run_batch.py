@@ -49,6 +49,7 @@ def main():
         print(f"\n=== RUN {i} of {args.repeat} ===\n")
         # 1. stop.sh
         run_cmd(["bash", "stop.sh"])
+        time.sleep(15)
         # 2. deploy_only.sh
         run_cmd(["bash", "deploy_only.sh"])
         # 3. deploy_app.sh
