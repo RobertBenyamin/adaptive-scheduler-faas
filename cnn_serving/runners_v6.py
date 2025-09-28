@@ -82,10 +82,8 @@ class PrintHook:
                             funcName = codeObject.co_name
                 self.origOut.write(newText)
 
-
 def MyHookOut(text):
     return 1, 1, ' -- pid -- ' + str(os.getpid()) + ' ' + text
-
 
 # Global variables
 serverSocket_ = None  # serverSocket
@@ -102,7 +100,6 @@ processTimestamps = {}  # {pid: (initial_burst, start_time)}
 processExecutionHistory = {}  # Menyimpan histori eksekusi proses
 processStartTime = {}
 
-
 lockPIDMap = threading.Lock()
 requestQueue = []  # queue of child processes
 mapPIDtoStatus = {}  # map from pid to status (running, waiting)
@@ -111,7 +108,6 @@ processArrivalTimes = {}  # Dictionary to track arrival times of processes
 responseMapWindows = []  # map from pid to response
 
 affinity_mask = {0, 1}
-
 
 # The function to update the core nums by request.
 def updateThread():
@@ -166,7 +162,6 @@ def updateThread():
         clientSocket.send(msg.encode(encoding="utf-8"))
 
         clientSocket.close()
-
 
 def myFunction(data_, clientSocket_):
     # Measure the start time for burst time calculation
@@ -229,7 +224,6 @@ def myFunction(data_, clientSocket_):
     burstTime = endTime - startTime
     return burstTime
 
-
 # Fungsi EWMA (Exponential Weighted Moving Average)
 def calculate_ewma(history, alpha=0.8):
     if not history:
@@ -239,9 +233,7 @@ def calculate_ewma(history, alpha=0.8):
         ewma = alpha * val + (1 - alpha) * ewma
     return ewma
 
-# Placeholder Model Training (Random Forest & Linear Regression)
-
-
+# Model Training (Random Forest & Linear Regression)
 def train_models(history):
     if len(history) < 5:  # Butuh minimal 5 data untuk regresi
         return np.mean(history), np.mean(history)
@@ -263,11 +255,9 @@ def train_models(history):
 
     return lin_pred, rf_pred
 
-
 # Parameter Mitigasi Ketidakpastian
 ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
 BETA_RT = 0.3   # Faktor penalti standar deviasi
-
 
 # Fungsi Menghitung Remaining Time
 def calculate_remaining_time(pid):
@@ -307,7 +297,6 @@ def calculate_remaining_time(pid):
 
     return remaining_time
 
-
 def calculate_total_wait_time(processQueue):
     """
     Calculate total wait time for all waiting processes
@@ -324,7 +313,6 @@ def calculate_total_wait_time(processQueue):
 
     return total_wait_time
 
-
 def calculate_dynamic_beta(total_wait_time, num_tasks):
     """
     Calculate dynamic beta based on system-wide wait time characteristics
@@ -338,13 +326,10 @@ def calculate_dynamic_beta(total_wait_time, num_tasks):
     # Normalization to prevent extreme values
     return min(max(dynamic_beta, 0.1), 1.0)
 
-
 # Batas waktu maksimum sebelum preemption terjadi (dalam detik)
 PREEMPTION_THRESHOLD = 4
 
 # Dictionary untuk menyimpan waktu mulai eksekusi setiap proses
-
-
 def waitTermination(childPid):
     """
     Menunggu proses selesai atau menggantinya jika ada proses lebih prioritas dengan preemption.
@@ -445,7 +430,6 @@ def waitTermination(childPid):
 
     lockPIDMap.release()
 
-
 def performIO(clientSocket_):
     global mapPIDtoStatus
     global numCores
@@ -475,8 +459,6 @@ def performIO(clientSocket_):
     blockedID = message["pid"]
 
     my_id = threading.get_native_id()
-
-    # blob_client = BlobClient.from_connection_string(connection_string, container_name="artifacteval", blob_name=blobName)
 
     lockPIDMap.acquire()
     mapPIDtoStatus[blockedID] = "blocked"
@@ -515,7 +497,6 @@ def performIO(clientSocket_):
             checkTableShadow[my_id] = []
             checkTable[blobName].append(my_id)
             lockCache.release()
-            # blob_val = (blob_client.download_blob()).readall()
             blob_storage = blobName.split("_")[0]
             download_file(blobName, f"{current_path}/{blobName}")
             with open(f"{current_path}/{blobName}", "rb") as file:
@@ -538,7 +519,6 @@ def performIO(clientSocket_):
         fReadname = message["value"]
         fRead = open(fReadname, "rb")
         value = fRead.read()
-        # blob_client.upload_blob(value, overwrite=True)
         upload_file(f"{current_path}/{value}", f"files/{blobName}")
         blob_val = "none"
 
@@ -587,8 +567,6 @@ agingFactor = 0.1  # Decrease burst time by 0.1 second for every second of waiti
 MAX_WAIT_TIME = 30  # seconds, after which process will be promoted to running
 
 # Function to adjust priorities based on aging
-
-
 def adjustPriorityAging():
     currentTime = time.time()
     updatedQueue = []
@@ -603,8 +581,6 @@ def adjustPriorityAging():
     processQueue[:] = updatedQueue
 
 # Function to handle starvation by promoting long-waiting processes
-
-
 def handleStarvation():
     currentTime = time.time()
     lockPIDMap.acquire()
@@ -621,7 +597,6 @@ def handleStarvation():
         pass
     finally:
         lockPIDMap.release()
-
 
 def run():
 
@@ -829,7 +804,6 @@ def run():
             threadWait = threading.Thread(
                 target=waitTermination, args=(childProcess,))
             threadWait.start()
-
 
 if __name__ == "__main__":
     run()
