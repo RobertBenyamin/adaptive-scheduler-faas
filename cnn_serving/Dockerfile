@@ -2,6 +2,8 @@ FROM jovanvr97/cnn_serve_start
 
 RUN useradd -m appuser
 
+ENV PATH="/home/appuser/.local/bin:${PATH}"
+
 USER appuser
 
 WORKDIR /app/pythonAction
