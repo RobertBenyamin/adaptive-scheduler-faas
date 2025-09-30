@@ -82,8 +82,10 @@ class PrintHook:
                             funcName = codeObject.co_name
                 self.origOut.write(newText)
 
+
 def MyHookOut(text):
     return 1, 1, ' -- pid -- ' + str(os.getpid()) + ' ' + text
+
 
 # Global variables
 serverSocket_ = None  # serverSocket
@@ -107,9 +109,11 @@ mapPIDtoStatus = {}  # map from pid to status (running, waiting)
 processArrivalTimes = {}  # Dictionary to track arrival times of processes
 responseMapWindows = []  # map from pid to response
 
-affinity_mask = {0, 1}
+affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 # The function to update the core nums by request.
+
+
 def updateThread():
     # Shared vaiable: numCores
     global numCores
@@ -162,6 +166,7 @@ def updateThread():
         clientSocket.send(msg.encode(encoding="utf-8"))
 
         clientSocket.close()
+
 
 def myFunction(data_, clientSocket_):
     # Measure the start time for burst time calculation
@@ -225,6 +230,8 @@ def myFunction(data_, clientSocket_):
     return burstTime
 
 # Fungsi EWMA (Exponential Weighted Moving Average)
+
+
 def calculate_ewma(history, alpha=0.8):
     if not history:
         return 0  # Jika tidak ada data, kembalikan 0
@@ -234,6 +241,8 @@ def calculate_ewma(history, alpha=0.8):
     return ewma
 
 # Model Training (Random Forest & Linear Regression)
+
+
 def train_models(history):
     if len(history) < 5:  # Butuh minimal 5 data untuk regresi
         return np.mean(history), np.mean(history)
@@ -255,11 +264,14 @@ def train_models(history):
 
     return lin_pred, rf_pred
 
+
 # Parameter Mitigasi Ketidakpastian
 ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
 BETA_RT = 0.3   # Faktor penalti standar deviasi
 
 # Fungsi Menghitung Remaining Time
+
+
 def calculate_remaining_time(pid):
     """
     Menghitung sisa waktu eksekusi berdasarkan beberapa metode prediksi burst time.
@@ -297,6 +309,7 @@ def calculate_remaining_time(pid):
 
     return remaining_time
 
+
 def calculate_total_wait_time(processQueue):
     """
     Calculate total wait time for all waiting processes
@@ -313,6 +326,7 @@ def calculate_total_wait_time(processQueue):
 
     return total_wait_time
 
+
 def calculate_dynamic_beta(total_wait_time, num_tasks):
     """
     Calculate dynamic beta based on system-wide wait time characteristics
@@ -326,10 +340,13 @@ def calculate_dynamic_beta(total_wait_time, num_tasks):
     # Normalization to prevent extreme values
     return min(max(dynamic_beta, 0.1), 1.0)
 
+
 # Batas waktu maksimum sebelum preemption terjadi (dalam detik)
 PREEMPTION_THRESHOLD = 4
 
 # Dictionary untuk menyimpan waktu mulai eksekusi setiap proses
+
+
 def waitTermination(childPid):
     """
     Menunggu proses selesai atau menggantinya jika ada proses lebih prioritas dengan preemption.
@@ -429,6 +446,7 @@ def waitTermination(childPid):
                 print(f"Error resuming process {nextProcess}: {e}")
 
     lockPIDMap.release()
+
 
 def performIO(clientSocket_):
     global mapPIDtoStatus
@@ -567,6 +585,8 @@ agingFactor = 0.1  # Decrease burst time by 0.1 second for every second of waiti
 MAX_WAIT_TIME = 30  # seconds, after which process will be promoted to running
 
 # Function to adjust priorities based on aging
+
+
 def adjustPriorityAging():
     currentTime = time.time()
     updatedQueue = []
@@ -581,6 +601,8 @@ def adjustPriorityAging():
     processQueue[:] = updatedQueue
 
 # Function to handle starvation by promoting long-waiting processes
+
+
 def handleStarvation():
     currentTime = time.time()
     lockPIDMap.acquire()
@@ -597,6 +619,7 @@ def handleStarvation():
         pass
     finally:
         lockPIDMap.release()
+
 
 def run():
 
@@ -615,7 +638,7 @@ def run():
     global processStartTime
 
     # Set the core of mxcontainer
-    numCores = 2
+    numCores = 8
     os.sched_setaffinity(0, affinity_mask)
 
     print("Welcome... ", numCores)
@@ -804,6 +827,7 @@ def run():
             threadWait = threading.Thread(
                 target=waitTermination, args=(childProcess,))
             threadWait.start()
+
 
 if __name__ == "__main__":
     run()
