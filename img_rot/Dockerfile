@@ -1,8 +1,7 @@
 FROM jovanvr97/img_proc_start
 
-RUN mkdir -p /app/pythonAction && chown -R appuser:appuser /app
-
 RUN useradd -m appuser
+
 USER appuser
 
 WORKDIR /app/pythonAction
