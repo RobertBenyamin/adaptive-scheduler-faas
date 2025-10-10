@@ -1,6 +1,5 @@
 import json
 import os
-from queue import Queue
 import sys
 import signal
 import threading
@@ -8,27 +7,10 @@ import socket
 import numpy as np
 import time
 import signal
-import requests
-from threading import Thread
+
+from sklearn.cluster import KMeans
 from storage_helper import download_file, upload_file
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
 import heapq
-
-current_path = "/app/pythonAction"
-BETA = 0.3  # Weight for wait time
-processQueue = []
-processStartTime = {}
-
-retrain_queue = Queue()
-trained_models = {}  # {pid: {'lin_model': model, 'rf_model': model}}
-lockModels = threading.Lock()
-
-
-def signal_handler(sig, frame):
-    serverSocket_.close()
-    sys.exit(0)
-
 
 class PrintHook:
     def __init__(self, out=1):
@@ -88,9 +70,10 @@ class PrintHook:
                 self.origOut.write(newText)
 
 
-def MyHookOut(text):
-    return 1, 1, ' -- pid -- ' + str(os.getpid()) + ' ' + text
-
+current_path = "/app/pythonAction"
+BETA = 0.3  # Weight for wait time
+processQueue = []
+processStartTime = {}
 
 # Global variables
 serverSocket_ = None  # serverSocket
@@ -104,7 +87,8 @@ mapPIDtoIO = {}
 lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
-processExecutionHistory = {}  # Menyimpan histori eksekusi proses
+FUNCTION_HISTORY_KEY = "function_history"
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []} # Menyimpan histori eksekusi proses
 processStartTime = {}
 
 lockPIDMap = threading.Lock()
@@ -117,46 +101,15 @@ responseMapWindows = []  # map from pid to response
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 
-def background_model_trainer():
-    """
-    This function runs in a separate thread. It waits for PIDs to be added
-    to the retrain_queue, then trains ML models for them without blocking
-    the main scheduling logic.
-    """
-    while True:
-        pid = retrain_queue.get()  # Blocks until a PID is available
-        if pid is None:  # Sentinel value to stop the thread if needed
-            break
+def signal_handler(sig, frame):
+    serverSocket_.close()
+    sys.exit(0)
 
-        history = []
-        # Safely access the shared execution history
-        with lockPIDMap:
-            if pid in processExecutionHistory and len(processExecutionHistory[pid]) >= 5:
-                # Make a copy to use outside the lock
-                history = list(processExecutionHistory[pid])
-            else:
-                continue  # Not enough data to train, wait for the next item
 
-        # Perform the expensive training outside of any critical locks
-        X = np.array(range(len(history))).reshape(-1, 1)
-        y = np.array(history)
-
-        lin_model = LinearRegression()
-        lin_model.fit(X, y)
-
-        rf_model = RandomForestRegressor(n_estimators=10, random_state=42)
-        rf_model.fit(X, y)
-
-        # Update the global model registry safely
-        with lockModels:
-            trained_models[pid] = {
-                'lin_model': lin_model, 'rf_model': rf_model}
-
-        print(f"Background Trainer: Models for PID {pid} have been updated.")
+def MyHookOut(text):
+    return 1, 1, ' -- pid -- ' + str(os.getpid()) + ' ' + text
 
 # The function to update the core nums by request.
-
-
 def updateThread():
     # Shared vaiable: numCores
     global numCores
@@ -273,8 +226,6 @@ def myFunction(data_, clientSocket_):
     return burstTime
 
 # Fungsi EWMA (Exponential Weighted Moving Average)
-
-
 def calculate_ewma(history, alpha=0.8):
     if not history:
         return 0  # Jika tidak ada data, kembalikan 0
@@ -283,82 +234,76 @@ def calculate_ewma(history, alpha=0.8):
         ewma = alpha * val + (1 - alpha) * ewma
     return ewma
 
-# Model Training (Random Forest & Linear Regression)
-
-
-def train_models(history):
-    if len(history) < 5:  # Butuh minimal 5 data untuk regresi
-        return np.mean(history), np.mean(history)
-
-    X = np.array(range(len(history))).reshape(-1, 1)
-    y = np.array(history)
-
-    # Model Linear Regression
-    lin_model = LinearRegression()
-    lin_model.fit(X, y)
-    lin_pred = lin_model.predict([[len(history)]])[
-        0]  # Prediksi waktu berikutnya
-
-    # Model Random Forest
-    rf_model = RandomForestRegressor(n_estimators=10, random_state=42)
-    rf_model.fit(X, y)
-    rf_pred = rf_model.predict([[len(history)]])[
-        0]  # Prediksi waktu berikutnya
-
-    return lin_pred, rf_pred
-
 
 # Parameter Mitigasi Ketidakpastian
 ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
 BETA_RT = 0.3   # Faktor penalti standar deviasi
 
 # Fungsi Menghitung Remaining Time
-
-
 def calculate_remaining_time(pid):
     """
     Menghitung sisa waktu eksekusi berdasarkan beberapa metode prediksi burst time.
     """
-    if pid not in processExecutionHistory:
-        # Gunakan initial burst time jika belum ada histori
-        # Default 2 detik jika tidak ditemukan
-        initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
-        return initial_burst
+    history = processExecutionHistory[FUNCTION_HISTORY_KEY]
 
-    history = processExecutionHistory[pid]
+    # Need enough data points to justify clustering
+    if len(history) < 10:
+        # Fallback to v8 logic for processes with insufficient history
+        if not history:
+            initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
+            return initial_burst
+        avg_burst_time = np.mean(history)
+        ewma_burst_time = calculate_ewma(history)
+        tsi = (avg_burst_time + ewma_burst_time) / 2
+        std_dev = np.std(history) if len(history) > 1 else 0
+        tsu = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)
+        elapsed_time = time.time() - processStartTime.get(pid, time.time())
+        return max(tsu - elapsed_time, 0)
 
-    # 1. Average Burst Time
-    avg_burst_time = np.mean(history) if history else processTimestamps[pid][0]
+    history_np = np.array(history).reshape(-1, 1)
+    
+    # --- Elbow Method to find optimal k ---
+    inertias = []
+    max_k = 5 # Check for up to 4 clusters
+    k_range = range(1, max_k)
+    
+    for k in k_range:
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto').fit(history_np)
+        inertias.append(kmeans.inertia_)
+    
+    # Find the "elbow" point. A simple way is to find the point with the
+    # maximum distance to a line drawn from the first to the last point.
+    # For a thesis, this is a simplified but effective heuristic.
+    # (A more robust method uses second derivatives, but this is good enough).
+    try:
+        # Calculate deltas
+        deltas = [inertias[i] - inertias[i+1] for i in range(len(inertias)-1)]
+        # Calculate delta-of-deltas (acceleration)
+        delta_deltas = [deltas[i] - deltas[i+1] for i in range(len(deltas)-1)]
+        # The optimal k is where the rate of decrease slows down the most.
+        # We add 2 because the lists are 0-indexed and differenced.
+        optimal_k = delta_deltas.index(max(delta_deltas)) + 2
+    except (ValueError, IndexError):
+        optimal_k = 2 # Fallback if calculation fails
 
-    # 2. EWMA (Exponential Weighted Moving Average)
-    ewma_burst_time = calculate_ewma(history)
+    # --- Perform clustering with the optimal k ---
+    try:
+        kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init='auto').fit(history_np)
+        centroids = sorted(kmeans.cluster_centers_.flatten())
+        optimistic_burst_time = centroids[0]
+    except Exception:
+        # Fallback to v8 logic if clustering fails
+        avg_burst_time = np.mean(history)
+        ewma_burst_time = calculate_ewma(history)
+        tsi = (avg_burst_time + ewma_burst_time) / 2
+        std_dev = np.std(history) if len(history) > 1 else 0
+        optimistic_burst_time = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)
 
-    # 3. Machine Learning Predictions (Linear Regression & Random Forest)
-    lin_pred = avg_burst_time
-    rf_pred = avg_burst_time
-
-    # Use pre-trained models if they exist
-    with lockModels:
-        if pid in trained_models:
-            models = trained_models[pid]
-            if 'lin_model' in models and 'rf_model' in models:
-                next_index = np.array([[len(history)]])
-                lin_pred = models['lin_model'].predict(next_index)[0]
-                rf_pred = models['rf_model'].predict(next_index)[0]
-
-    # 4. Hitung Standar Deviasi
-    std_dev = np.std(history) if len(history) > 1 else 0
-
-    # 5. Hitung Estimasi Burst Time dengan Mitigasi Ketidakpastian
-    tsi = (avg_burst_time + ewma_burst_time + lin_pred +
-           rf_pred) / 4  # Rata-rata dari semua metode
-    tsu = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)  # Mitigasi ketidakpastian
-
-    # 6. Hitung waktu yang sudah berjalan
+    # Hitung waktu yang sudah berjalan
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
 
-    # 7. Estimasi Sisa Waktu
-    remaining_time = max(tsu - elapsed_time, 0)
+    # Estimasi sisa waktu
+    remaining_time = max(optimistic_burst_time - elapsed_time, 0)
 
     return remaining_time
 
@@ -397,9 +342,6 @@ def calculate_dynamic_beta(total_wait_time, num_tasks):
 # Batas waktu maksimum sebelum preemption terjadi (dalam detik)
 PREEMPTION_THRESHOLD = 4
 
-# Dictionary untuk menyimpan waktu mulai eksekusi setiap proses
-
-
 def waitTermination(childPid):
     """
     Menunggu proses selesai atau menggantinya jika ada proses lebih prioritas dengan preemption.
@@ -418,12 +360,8 @@ def waitTermination(childPid):
         if childPid in processStartTime:
             elapsed = time.time() - processStartTime[childPid]
 
-            if childPid not in processExecutionHistory:
-                processExecutionHistory[childPid] = []
-
-            processExecutionHistory[childPid].append(elapsed)
-
-            retrain_queue.put(childPid)
+            # Use the constant key to aggregate history for the function
+            processExecutionHistory[FUNCTION_HISTORY_KEY].append(elapsed)
 
     except Exception as e:
         print(f"Error removing process {childPid}: {e}")
@@ -634,50 +572,7 @@ def IOThread():
         (clientSocket, _) = serverSocket.accept()
         threading.Thread(target=performIO, args=(clientSocket,)).start()
 
-
-# Parameters for aging and starvation
-agingFactor = 0.1  # Decrease burst time by 0.1 second for every second of waiting
-MAX_WAIT_TIME = 30  # seconds, after which process will be promoted to running
-
-# Function to adjust priorities based on aging
-
-
-def adjustPriorityAging():
-    currentTime = time.time()
-    updatedQueue = []
-    while processQueue:
-        burstTime, pid = heapq.heappop(processQueue)
-        waitTime = currentTime - processArrivalTimes[pid]
-        # Decrease burstTime based on waitTime (aging factor)
-        adjustedBurstTime = max(burstTime - (waitTime * agingFactor), 0)
-        heapq.heappush(updatedQueue, (adjustedBurstTime, pid))
-
-    # Replace old queue with updated one
-    processQueue[:] = updatedQueue
-
-# Function to handle starvation by promoting long-waiting processes
-
-
-def handleStarvation():
-    currentTime = time.time()
-    lockPIDMap.acquire()
-    try:
-        for burstTime, pid in processQueue:
-            waitTime = currentTime - processArrivalTimes[pid]
-            if waitTime >= MAX_WAIT_TIME:
-                # Force this process to run by promoting its priority
-                mapPIDtoStatus[pid] = "running"
-                os.kill(pid, signal.SIGCONT)  # Resume process
-                requestQueue.append(pid)
-                break  # Handle one process at a time
-    except:
-        pass
-    finally:
-        lockPIDMap.release()
-
-
 def run():
-
     # serverSocket_: socket
     # actionModule:  the module to execute
     # requestQueue:
@@ -720,11 +615,6 @@ def run():
     # Redirect the stdOut and stdErr
     phOut = PrintHook()
     phOut.Start(MyHookOut)
-
-    # Start the background model trainer thread
-    threadTrainer = threading.Thread(
-        target=background_model_trainer, daemon=True)
-    threadTrainer.start()
 
     # Monitor numCore update
     threadUpdate = threading.Thread(target=updateThread)
