@@ -260,44 +260,27 @@ def calculate_remaining_time(pid):
         elapsed_time = time.time() - processStartTime.get(pid, time.time())
         return max(tsu - elapsed_time, 0)
 
-    history_np = np.array(history).reshape(-1, 1)
+    history = np.array(history).reshape(-1, 1)
     
-    # --- Elbow Method to find optimal k ---
-    inertias = []
-    max_k = 5 # Check for up to 4 clusters
-    k_range = range(1, max_k)
-    
-    for k in k_range:
-        kmeans = KMeans(n_clusters=k, random_state=42, n_init='auto').fit(history_np)
-        inertias.append(kmeans.inertia_)
-    
-    # Find the "elbow" point. A simple way is to find the point with the
-    # maximum distance to a line drawn from the first to the last point.
-    # For a thesis, this is a simplified but effective heuristic.
-    # (A more robust method uses second derivatives, but this is good enough).
     try:
-        # Calculate deltas
-        deltas = [inertias[i] - inertias[i+1] for i in range(len(inertias)-1)]
-        # Calculate delta-of-deltas (acceleration)
-        delta_deltas = [deltas[i] - deltas[i+1] for i in range(len(deltas)-1)]
-        # The optimal k is where the rate of decrease slows down the most.
-        # We add 2 because the lists are 0-indexed and differenced.
-        optimal_k = delta_deltas.index(max(delta_deltas)) + 2
-    except (ValueError, IndexError):
-        optimal_k = 2 # Fallback if calculation fails
-
-    # --- Perform clustering with the optimal k ---
-    try:
-        kmeans = KMeans(n_clusters=optimal_k, random_state=42, n_init='auto').fit(history_np)
+        # Use K-Means to find two clusters: short jobs and long jobs
+        kmeans = KMeans(n_clusters=3, random_state=42, n_init='auto').fit(history)
+        
+        # The centroids are the predicted execution times for each cluster
         centroids = sorted(kmeans.cluster_centers_.flatten())
+        
+        # Optimistic Prediction: Assume the next job will be of the shortest type
         optimistic_burst_time = centroids[0]
+
     except Exception:
-        # Fallback to v8 logic if clustering fails
-        avg_burst_time = np.mean(history)
-        ewma_burst_time = calculate_ewma(history)
+        # If clustering fails (e.g., not enough variance), fallback to v8 logic
+        history_flat = history.flatten()
+        avg_burst_time = np.mean(history_flat)
+        ewma_burst_time = calculate_ewma(history_flat)
         tsi = (avg_burst_time + ewma_burst_time) / 2
-        std_dev = np.std(history) if len(history) > 1 else 0
+        std_dev = np.std(history_flat) if len(history_flat) > 1 else 0
         optimistic_burst_time = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)
+
 
     # Hitung waktu yang sudah berjalan
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
