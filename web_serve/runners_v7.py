@@ -238,17 +238,19 @@ def calculate_ewma(history, alpha=0.8):
 # Parameter Mitigasi Ketidakpastian
 ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
 BETA_RT = 0.3   # Faktor penalti standar deviasi
+GAMMA = 1.0 # Safety margin factor for intra-cluster standard deviation
 
 # Fungsi Menghitung Remaining Time
 def calculate_remaining_time(pid):
     """
-    Menghitung sisa waktu eksekusi berdasarkan beberapa metode prediksi burst time.
+    Uses K-Means to identify clusters but makes a risk-adjusted prediction
+    based on the mean and standard deviation of the shortest cluster.
     """
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
+    MIN_SAMPLES_FOR_CLUSTERING = 10
 
-    # Need enough data points to justify clustering
-    if len(history) < 10:
-        # Fallback to v8 logic for processes with insufficient history
+    # Fallback to v8 logic if history is too short
+    if len(history) < MIN_SAMPLES_FOR_CLUSTERING:
         if not history:
             initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
             return initial_burst
@@ -260,33 +262,41 @@ def calculate_remaining_time(pid):
         elapsed_time = time.time() - processStartTime.get(pid, time.time())
         return max(tsu - elapsed_time, 0)
 
-    history = np.array(history).reshape(-1, 1)
+    history_np = np.array(history).reshape(-1, 1)
     
     try:
-        # Use K-Means to find two clusters: short jobs and long jobs
-        kmeans = KMeans(n_clusters=3, random_state=42, n_init='auto').fit(history)
+        # 1. Perform clustering
+        kmeans = KMeans(n_clusters=3, random_state=42, n_init='auto').fit(history_np)
         
-        # The centroids are the predicted execution times for each cluster
-        centroids = sorted(kmeans.cluster_centers_.flatten())
-        
-        # Optimistic Prediction: Assume the next job will be of the shortest type
-        optimistic_burst_time = centroids[0]
+        # Find which cluster is the 'shortest' one
+        shortest_cluster_index = np.argmin(kmeans.cluster_centers_)
+        shortest_centroid = kmeans.cluster_centers_[shortest_cluster_index][0]
+
+        # 2. Isolate the data points belonging to the shortest cluster
+        short_cluster_points = history_np[kmeans.labels_ == shortest_cluster_index]
+
+        # 3. Calculate the standard deviation *within* that cluster
+        if len(short_cluster_points) > 1:
+            std_dev_short_cluster = np.std(short_cluster_points)
+        else:
+            std_dev_short_cluster = 0
+
+        # 4. Create the risk-adjusted burst time prediction
+        # This is the key fix: add a safety margin based on the cluster's own volatility
+        predicted_burst_time = shortest_centroid + (GAMMA * std_dev_short_cluster)
 
     except Exception:
-        # If clustering fails (e.g., not enough variance), fallback to v8 logic
-        history_flat = history.flatten()
+        # If clustering fails, fallback to the robust v8 logic
+        history_flat = history_np.flatten()
         avg_burst_time = np.mean(history_flat)
         ewma_burst_time = calculate_ewma(history_flat)
         tsi = (avg_burst_time + ewma_burst_time) / 2
         std_dev = np.std(history_flat) if len(history_flat) > 1 else 0
-        optimistic_burst_time = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)
+        predicted_burst_time = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)
 
-
-    # Hitung waktu yang sudah berjalan
+    # Calculate remaining time based on the new, safer prediction
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
-
-    # Estimasi sisa waktu
-    remaining_time = max(optimistic_burst_time - elapsed_time, 0)
+    remaining_time = max(predicted_burst_time - elapsed_time, 0)
 
     return remaining_time
 
