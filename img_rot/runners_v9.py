@@ -238,57 +238,80 @@ def calculate_ewma(history, alpha=0.8):
 # Parameter Mitigasi Ketidakpastian
 ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
 BETA_RT = 0.3   # Faktor penalti standar deviasi
+MACD_ADJUSTMENT_FACTOR = 0.2
 
 
-def calculate_bollinger_bands(history, window=10, k=2):
+def calculate_ema(data, period):
     """
-    Calculate Bollinger Bands for execution time prediction
-    window: lookback period (e.g., last 10 executions)
-    k: number of standard deviations (typically 2)
+    Calculates the Exponential Moving Average (EMA) for a given data series.
     """
-    if len(history) < window:
-        recent_history = history
-    else:
-        recent_history = history[-window:]
+    if len(data) < period:
+        return np.mean(data) # Fallback to simple average if not enough data
     
-    middle_band = np.mean(recent_history)
-    std_dev = np.std(recent_history)
-    
-    upper_band = middle_band + (k * std_dev)
-    lower_band = max(middle_band - (k * std_dev), 0)  # Can't be negative
-    
-    return lower_band, middle_band, upper_band
+    # Formula: EMA = (Current Value * Multiplier) + (Previous EMA * (1 - Multiplier))
+    multiplier = 2 / (period + 1)
+    ema = np.mean(data[:period]) # Start with SMA for the first value
+    for i in range(period, len(data)):
+        ema = (data[i] * multiplier) + (ema * (1 - multiplier))
+    return ema
+
+def get_adaptive_macd_params(history_len):
+    """
+    Returns adaptive (fast, slow) EMA periods based on history length.
+    This is crucial for making MACD work with our short test durations.
+    """
+    if history_len >= 20: # HIGH_LOAD scenario
+        return (5, 10) # More stable parameters
+    elif history_len >= 8: # MED_LOAD scenario
+        return (2, 5)  # Very sensitive parameters
+    else: # LOW_LOAD or initial phase
+        return (0, 0) # Signal that MACD is not applicable
 
 # Fungsi Menghitung Remaining Time
 def calculate_remaining_time(pid):
+    """
+    Calculates remaining time using a baseline v8 prediction, adjusted
+    by a momentum signal from an adaptive MACD indicator.
+    """
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
+    
+    # --- 1. Calculate Baseline Prediction (from runners_v8) ---
+    if not history:
+        initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
+        return initial_burst
+    
+    avg_burst_time = np.mean(history)
+    ewma_burst_time = calculate_ewma(history)
+    tsi = (avg_burst_time + ewma_burst_time) / 2
+    std_dev = np.std(history) if len(history) > 1 else 0
+    baseline_prediction = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)
 
-    # Fallback to v8 logic if history is too short
-    if len(history) < 10:
-        if not history:
-            initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
-            return initial_burst
-        avg_burst_time = np.mean(history)
-        ewma_burst_time = calculate_ewma(history)
-        tsi = (avg_burst_time + ewma_burst_time) / 2
-        std_dev = np.std(history) if len(history) > 1 else 0
-        tsu = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)
-        elapsed_time = time.time() - processStartTime.get(pid, time.time())
-        return max(tsu - elapsed_time, 0)
+    # --- 2. Get Adaptive MACD Parameters ---
+    fast_period, slow_period = get_adaptive_macd_params(len(history))
 
-    lower_band, middle_band, upper_band = calculate_bollinger_bands(history)
-    
-    # Strategy: Use lower band for optimistic prediction, 
-    # but add a safety margin if volatility is high
-    band_width = upper_band - lower_band
-    
-    if band_width > middle_band * 0.5:  # High volatility (>50% of mean)
-        # Be conservative: use middle band
-        predicted_burst_time = middle_band
-    else:  # Low volatility
-        # Be optimistic: use lower band
-        predicted_burst_time = lower_band
-    
+    # --- 3. Apply MACD Adjustment if applicable ---
+    if fast_period > 0: # Check if MACD is applicable
+        try:
+            ema_fast = calculate_ema(history, fast_period)
+            ema_slow = calculate_ema(history, slow_period)
+            macd_line = ema_fast - ema_slow
+            
+            # Determine adjustment based on trend direction
+            if macd_line > 0: # Uptrend: execution times are increasing
+                adjustment = MACD_ADJUSTMENT_FACTOR
+            else: # Downtrend: execution times are decreasing
+                adjustment = -MACD_ADJUSTMENT_FACTOR
+            
+            # Apply the adjustment to the baseline
+            predicted_burst_time = baseline_prediction * (1 + adjustment)
+        except Exception:
+            # If MACD calculation fails for any reason, just use the baseline
+            predicted_burst_time = baseline_prediction
+    else:
+        # Not enough data for MACD, use the baseline prediction directly
+        predicted_burst_time = baseline_prediction
+
+    # --- 4. Calculate Final Remaining Time ---
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
     remaining_time = max(predicted_burst_time - elapsed_time, 0)
     
