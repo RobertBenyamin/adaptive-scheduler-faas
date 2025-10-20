@@ -47,6 +47,9 @@ def main():
 
     for i in range(1, args.repeat + 1):
         print(f"\n=== RUN {i} of {args.repeat} ===\n")
+        # 1. stop.sh
+        run_cmd(["bash", "stop.sh"])
+        time.sleep(30)
         # 2. deploy_only.sh
         run_cmd(["bash", "deploy_only.sh"])
         time.sleep(30)
@@ -66,9 +69,6 @@ def main():
         print(f"=== Finished run {i} ===\n")
         # sleep between runs
         time.sleep(30)
-        # 1. stop.sh
-        run_cmd(["bash", "stop.sh"])
-        time.sleep(120)
 
 if __name__ == "__main__":
     main()
