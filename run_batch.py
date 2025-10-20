@@ -39,6 +39,29 @@ def run_cmd(cmd, shell=False):
         print(f"Command failed: {cmd}")
         sys.exit(1)
 
+def wait_namespace_not_terminating(namespace, timeout=600, poll_interval=5):
+    """
+    Return True when namespace is absent or its phase is not 'Terminating'.
+    Return False if timeout elapsed while still Terminating.
+    """
+    start = time.time()
+    while True:
+        result = subprocess.run(["kubectl", "get", "ns", namespace, "-o", "jsonpath={.status.phase}"],
+                                capture_output=True, text=True)
+        if result.returncode != 0:
+            # namespace not found => OK (deleted)
+            print(f"Namespace {namespace} not found (treated as deleted).")
+            return True
+        phase = result.stdout.strip()
+        if phase != "Terminating":
+            print(f"Namespace {namespace} phase: {phase}")
+            return True
+        if time.time() - start > timeout:
+            print(f"Timeout waiting for namespace {namespace} to exit Terminating.")
+            return False
+        print(f"Namespace {namespace} is Terminating; waiting {poll_interval}s...")
+        time.sleep(poll_interval)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("basename", type=str, help="Base name for output files (e.g. runners5)")
@@ -49,7 +72,15 @@ def main():
         print(f"\n=== RUN {i} of {args.repeat} ===\n")
         # 1. stop.sh
         run_cmd(["bash", "stop.sh"])
-        time.sleep(30)
+        # Wait until knative-serving namespace is not Terminating (or gone)
+        ok = wait_namespace_not_terminating("knative-serving", timeout=600)
+        if not ok:
+            print("knative-serving namespace still terminating after timeout. You can:")
+            print("  - increase the timeout,")
+            print("  - remove finalizers manually (kubectl replace --raw /api/v1/namespaces/knative-serving/finalize -f <edited-json>),")
+            print("  - or inspect 'kubectl describe ns knative-serving' to find blockers.")
+            sys.exit(1)
+        time.sleep(10)
         # 2. deploy_only.sh
         run_cmd(["bash", "deploy_only.sh"])
         time.sleep(30)
