@@ -547,47 +547,6 @@ def IOThread():
         threading.Thread(target=performIO, args=(clientSocket,)).start()
 
 
-# Parameters for aging and starvation
-agingFactor = 0.1  # Decrease burst time by 0.1 second for every second of waiting
-MAX_WAIT_TIME = 30  # seconds, after which process will be promoted to running
-
-# Function to adjust priorities based on aging
-
-
-def adjustPriorityAging():
-    currentTime = time.time()
-    updatedQueue = []
-    while processQueue:
-        burstTime, pid = heapq.heappop(processQueue)
-        waitTime = currentTime - processArrivalTimes[pid]
-        # Decrease burstTime based on waitTime (aging factor)
-        adjustedBurstTime = max(burstTime - (waitTime * agingFactor), 0)
-        heapq.heappush(updatedQueue, (adjustedBurstTime, pid))
-
-    # Replace old queue with updated one
-    processQueue[:] = updatedQueue
-
-# Function to handle starvation by promoting long-waiting processes
-
-
-def handleStarvation():
-    currentTime = time.time()
-    lockPIDMap.acquire()
-    try:
-        for burstTime, pid in processQueue:
-            waitTime = currentTime - processArrivalTimes[pid]
-            if waitTime >= MAX_WAIT_TIME:
-                # Force this process to run by promoting its priority
-                mapPIDtoStatus[pid] = "running"
-                os.kill(pid, signal.SIGCONT)  # Resume process
-                requestQueue.append(pid)
-                break  # Handle one process at a time
-    except:
-        pass
-    finally:
-        lockPIDMap.release()
-
-
 def run():
     # serverSocket_: socket
     # actionModule:  the module to execute

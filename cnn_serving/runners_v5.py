@@ -99,7 +99,8 @@ mapPIDtoIO = {}
 lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
-processExecutionHistory = {}  # Menyimpan histori eksekusi proses
+FUNCTION_HISTORY_KEY = "function_history"
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}  # Menyimpan histori eksekusi proses
 processStartTime = {}
 
 
@@ -274,13 +275,13 @@ def calculate_remaining_time(pid):
     """
     Menghitung sisa waktu eksekusi berdasarkan average burst time dari histori eksekusi.
     """
-    if pid not in processExecutionHistory:
+    history = processExecutionHistory[FUNCTION_HISTORY_KEY]
+
+    if not history:
         # Gunakan initial burst time jika belum ada histori
         # Default 2 detik jika tidak ditemukan
         initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
         return initial_burst
-
-    history = processExecutionHistory[pid]
 
     # Menghitung rata-rata burst time dari histori
     avg_burst_time = sum(history) / \
@@ -350,10 +351,8 @@ def waitTermination(childPid):
         if childPid in processStartTime:
             elapsed = time.time() - processStartTime[childPid]
 
-            if childPid not in processExecutionHistory:
-                processExecutionHistory[childPid] = []
-
-            processExecutionHistory[childPid].append(elapsed)
+            # Use the constant key to aggregate history for the function
+            processExecutionHistory[FUNCTION_HISTORY_KEY].append(elapsed)
 
     except Exception as e:
         print(f"Error removing process {childPid}: {e}")
@@ -572,43 +571,6 @@ def IOThread():
 # Parameters for aging and starvation
 agingFactor = 0.1  # Decrease burst time by 0.1 second for every second of waiting
 MAX_WAIT_TIME = 30  # seconds, after which process will be promoted to running
-
-# Function to adjust priorities based on aging
-
-
-def adjustPriorityAging():
-    currentTime = time.time()
-    updatedQueue = []
-    while processQueue:
-        burstTime, pid = heapq.heappop(processQueue)
-        waitTime = currentTime - processArrivalTimes[pid]
-        # Decrease burstTime based on waitTime (aging factor)
-        adjustedBurstTime = max(burstTime - (waitTime * agingFactor), 0)
-        heapq.heappush(updatedQueue, (adjustedBurstTime, pid))
-
-    # Replace old queue with updated one
-    processQueue[:] = updatedQueue
-
-# Function to handle starvation by promoting long-waiting processes
-
-
-def handleStarvation():
-    currentTime = time.time()
-    lockPIDMap.acquire()
-    try:
-        for burstTime, pid in processQueue:
-            waitTime = currentTime - processArrivalTimes[pid]
-            if waitTime >= MAX_WAIT_TIME:
-                # Force this process to run by promoting its priority
-                mapPIDtoStatus[pid] = "running"
-                os.kill(pid, signal.SIGCONT)  # Resume process
-                requestQueue.append(pid)
-                break  # Handle one process at a time
-    except:
-        pass
-    finally:
-        lockPIDMap.release()
-
 
 def run():
 
