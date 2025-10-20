@@ -18,15 +18,16 @@ kubectl delete -f web_serve.yaml
 
 cd ..
 
-# Install the required custom resources by running the command:
-kubectl delete -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-crds.yaml
+# Delete the namespaces which will also delete all the resources within them.
+# The --wait flag ensures the command blocks until deletion is complete.
+echo "Deleting Knative namespaces and waiting for completion..."
+kubectl delete namespace knative-serving --wait=true --ignore-not-found=true
+kubectl delete namespace kourier-system --wait=true --ignore-not-found=true
+echo "Knative namespaces deleted."
 
-# Install the core components of Knative Serving by running the command:
-kubectl delete -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-core.yaml
+# The CRDs should be deleted last.
+echo "Deleting Knative CRDs..."
+kubectl delete -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-crds.yaml --wait=true --ignore-not-found=true
+echo "Knative CRDs deleted."
 
-# Install the Knative Kourier controller by running the command: 
-kubectl delete -f https://github.com/knative/net-kourier/releases/download/knative-v1.9.1/kourier.yaml
-
-kubectl delete -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-default-domain.yaml
-
-sleep 3
+echo "Cleanup complete."
