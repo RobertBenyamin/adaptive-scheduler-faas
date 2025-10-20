@@ -47,28 +47,27 @@ def main():
 
     for i in range(1, args.repeat + 1):
         print(f"\n=== RUN {i} of {args.repeat} ===\n")
+        # 1. stop.sh
+        run_cmd(["bash", "stop.sh"])
+        time.sleep(120)
         # 2. deploy_only.sh
         run_cmd(["bash", "deploy_only.sh"])
-        time.sleep(30)
+        time.sleep(15)
         # 3. deploy_app.sh
         run_cmd(["bash", "deploy_app.sh"])
-        time.sleep(30)
+        time.sleep(15)
         # 4. Get kourier IP
         ip = get_kourier_ip()
         print(f"Kourier IP: {ip}")
-        time.sleep(30)
+        time.sleep(15)
         # 5. python3 knative.py --target_ip xx.xx.xx.xx
         run_cmd(["python3", "knative.py", "--target_ip", ip])
-        time.sleep(30)
         # 6. python3 analyze.py --output_file output.xlsx
         output_file = f"{args.basename}-{i}.xlsx"
         run_cmd(["python3", "analyze.py", "--output_file", output_file])
         print(f"=== Finished run {i} ===\n")
         # sleep between runs
-        time.sleep(30)
-        # 1. stop.sh
-        run_cmd(["bash", "stop.sh"])
-        time.sleep(60)
+        time.sleep(15)
 
 if __name__ == "__main__":
     main()
