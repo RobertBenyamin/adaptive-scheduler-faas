@@ -6,6 +6,12 @@ sudo kubectl apply -f https://github.com/knative/serving/releases/download/knati
 # Install the core components of Knative Serving by running the command:
 sudo kubectl apply -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-core.yaml
 
+# Wait for the Knative Serving webhooks to be ready
+echo "Waiting for Knative webhooks to become ready..."
+sudo kubectl wait --for=condition=available --timeout=300s deployment/webhook -n knative-serving
+sudo kubectl wait --for=condition=available --timeout=300s deployment/domainmapping-webhook -n knative-serving
+echo "Knative webhooks are ready."
+
 # Install the Knative Kourier controller by running the command: 
 sudo kubectl apply -f https://github.com/knative/net-kourier/releases/download/knative-v1.9.1/kourier.yaml
 
