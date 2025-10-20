@@ -13,6 +13,22 @@ To run this repository, you'll need a cluster with a minimum of two nodes: one *
   * **Docker**: Ensure Docker is installed on all nodes. For EC2 instances, you can follow the official guide [here](https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/install-docker.html).
   * **Networking**: Ensure your slave nodes can communicate with the master node.
 
+### Install Docker
+
+```
+# Update package lists
+sudo apt-get update
+
+# Install Docker
+sudo apt-get install -y docker.io
+
+# Add the 'ubuntu' user to the 'docker' group to run docker commands without sudo
+sudo usermod -aG docker ubuntu
+
+# You will need to log out and log back in for this change to take effect
+exit
+```
+
 ### Installation & Setup
 
 1.  **Set up the Master Node:**
@@ -47,7 +63,7 @@ To run this repository, you'll need a cluster with a minimum of two nodes: one *
     The application image needs to be built on each slave node. Execute the build.sh script to create the necessary image for the evaluation.
 
     ```bash
-    ./build.sh
+    ./build.sh runners_v5.py
     ```
 
 -----
@@ -59,7 +75,7 @@ To run this repository, you'll need a cluster with a minimum of two nodes: one *
 
       * `AWS_ACCESS_KEY_ID`
       * `AWS_SECRET_ACCESS_KEY`
-      * `AWS_DEFAULT_REGION`
+      * `AWS_SESSION_TOKEN`
 
 2.  **Install Knative infrastructure:**
     Before running the script, open `deploy_only.sh` and update it with the private IP address of your master node.
@@ -79,7 +95,7 @@ To run this repository, you'll need a cluster with a minimum of two nodes: one *
 
 5.  **Start Evaluation**
     ```bash
-    python3 knative.py
+    python3 run_batch.py runners5-multi 10
     ```
 
     The result will be stored on `run-all-out.txt`
