@@ -86,7 +86,8 @@ mapPIDtoIO = {}
 lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
-processExecutionHistory = {}  # Menyimpan histori eksekusi proses
+FUNCTION_HISTORY_KEY = "function_history"
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}  # Menyimpan histori eksekusi proses
 processStartTime = {}
 
 lockPIDMap = threading.Lock()
@@ -248,13 +249,13 @@ def calculate_remaining_time(pid):
     """
     Menghitung sisa waktu eksekusi berdasarkan beberapa metode prediksi burst time.
     """
-    if pid not in processExecutionHistory:
+    history = processExecutionHistory[FUNCTION_HISTORY_KEY]
+
+    if not history:
         # Gunakan initial burst time jika belum ada histori
         # Default 2 detik jika tidak ditemukan
         initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
         return initial_burst
-
-    history = processExecutionHistory[pid]
 
     # 1. Average Burst Time
     avg_burst_time = np.mean(history) if history else processTimestamps[pid][0]
@@ -333,10 +334,8 @@ def waitTermination(childPid):
         if childPid in processStartTime:
             elapsed = time.time() - processStartTime[childPid]
 
-            if childPid not in processExecutionHistory:
-                processExecutionHistory[childPid] = []
-
-            processExecutionHistory[childPid].append(elapsed)
+            # Use the constant key to aggregate history for the function
+            processExecutionHistory[FUNCTION_HISTORY_KEY].append(elapsed)
 
     except Exception as e:
         print(f"Error removing process {childPid}: {e}")
