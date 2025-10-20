@@ -57,6 +57,7 @@ def main():
         # 4. Get kourier IP
         ip = get_kourier_ip()
         print(f"Kourier IP: {ip}")
+        time.sleep(15)
         # 5. python3 knative.py --target_ip xx.xx.xx.xx
         run_cmd(["python3", "knative.py", "--target_ip", ip])
         # 6. python3 analyze.py --output_file output.xlsx
