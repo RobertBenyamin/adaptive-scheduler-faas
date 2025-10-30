@@ -31,7 +31,7 @@ s3_client = boto3.client(
 
 
 # Nama bucket dan nama file
-BUCKET_NAME = 'faas-scheduler-data'
+BUCKET_NAME = 'faas-scheduler-data-0'
 object_name = 'img10.png'
 local_filename = '/home/ec2-user/KNative_prototype/img10.png'
 
