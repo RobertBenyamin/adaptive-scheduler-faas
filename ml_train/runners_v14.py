@@ -122,7 +122,7 @@ affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 # LSTM Model Cache (to avoid retraining on every call)
 lstm_model = None
 lstm_model_lock = threading.Lock()
-lstm_sequence_length = 5  # Use last 5 execution times to predict the next
+lstm_sequence_length = 10  # Changed from 5 to 10 - captures last 10 execution times
 
 
 def build_lstm_model(input_shape):
@@ -365,7 +365,8 @@ def calculate_remaining_time(pid):
         return initial_burst
 
     # --- Try LSTM Prediction (only if we have enough data) ---
-    if len(history) >= lstm_sequence_length + 3:  # Minimum viable data
+    if len(history) >= lstm_sequence_length + 5:  # Minimum viable data
+        # Changed from (lstm_sequence_length + 3) to allow 5 training sequences
         # Train model infrequently (every 10 new samples or when model is None)
         with lstm_model_lock:
             if lstm_model is None or len(history) % 10 == 0:
