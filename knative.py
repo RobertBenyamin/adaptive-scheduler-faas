@@ -103,7 +103,7 @@ output_file = open("run-all-out.txt", "w")
 
 indR = 0
 for load in loads:
-    duration = 60
+    duration = 10
     seed = 100
     rate = load
     # generate Poisson's distribution of events 
