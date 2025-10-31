@@ -10,7 +10,7 @@ WORKDIR /app/pythonAction
 
 RUN pip install --upgrade pip
 RUN pip install --user sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis numpy jsonpickle boto3 scikit-learn xgboost
-RUN pip install --user tensorflow
+# RUN pip install --user tensorflow
 
 ARG RUNNER_FILE=runner.py
 
