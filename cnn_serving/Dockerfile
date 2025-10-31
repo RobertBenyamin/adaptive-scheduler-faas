@@ -9,7 +9,7 @@ USER appuser
 WORKDIR /app/pythonAction
 
 RUN pip install --upgrade pip
-RUN pip install --user sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis numpy==1.23.5 jsonpickle boto3 Flask scikit-learn
+RUN pip install --user sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis numpy==1.23.5 jsonpickle boto3 Flask scikit-learn xgboost
 RUN pip install --user tensorflow
 
 ARG RUNNER_FILE=runner.py
