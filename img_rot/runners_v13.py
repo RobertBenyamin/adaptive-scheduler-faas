@@ -261,7 +261,7 @@ BETA_RT = 0.3   # Faktor penalti standar deviasi
 # Fungsi Menghitung Remaining Time
 def calculate_remaining_time(pid):
     """
-    Menghitung sisa waktu eksekusi berdasarkan beberapa metode prediksi burst time.
+    Menghitung sisa waktu eksekusi menggunakan Random Forest prediction.
     """
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
 
@@ -271,27 +271,14 @@ def calculate_remaining_time(pid):
         initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
         return initial_burst
 
-    # 1. Average Burst Time
-    avg_burst_time = np.mean(history) if history else processTimestamps[pid][0]
-
-    # 2. EWMA (Exponential Weighted Moving Average)
-    ewma_burst_time = calculate_ewma(history)
-
-    # 3. Machine Learning Predictions (Random Forest)
+    # Machine Learning Predictions (Random Forest only)
     rf_pred = train_models(history)
 
-    # 4. Hitung Standar Deviasi
-    std_dev = np.std(history) if len(history) > 1 else 0
-
-    # 5. Hitung Estimasi Burst Time dengan Mitigasi Ketidakpastian
-    tsi = (avg_burst_time + ewma_burst_time + rf_pred) / 3  # Rata-rata dari semua metode
-    tsu = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)  # Mitigasi ketidakpastian
-
-    # 6. Hitung waktu yang sudah berjalan
+    # Hitung waktu yang sudah berjalan
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
 
-    # 7. Estimasi Sisa Waktu
-    remaining_time = max(tsu - elapsed_time, 0)
+    # Estimasi Sisa Waktu
+    remaining_time = max(rf_pred - elapsed_time, 0)
 
     return remaining_time
 
