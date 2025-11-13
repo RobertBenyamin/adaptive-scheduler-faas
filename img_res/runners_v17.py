@@ -287,8 +287,6 @@ def train_rf_improved(history):
     """
     Train improved Random Forest with temporal context.
     """
-    global rf_model_cache
-    
     if len(history) < 10:
         return None
     
@@ -350,24 +348,19 @@ def calculate_remaining_time(pid):
     """
     Improved Random Forest prediction with adding temporal, statistical, and trend features.
     """
-    global rf_model_cache
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
 
     if not history:
         initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
         return initial_burst
 
-    # Train model infrequently (every 15 samples or when None)
     if len(history) >= 10:
-        with rf_model_lock:
-            if rf_model_cache is None or len(history) % 15 == 0:
-                rf_model_cache = train_rf_improved(history)
-        
-        if rf_model_cache is not None:
-            rf_pred = predict_rf_improved(rf_model_cache, history)
-            if rf_pred is not None:
-                elapsed_time = time.time() - processStartTime.get(pid, time.time())
-                return max(rf_pred - elapsed_time, 0)
+      rf_model = train_rf_improved(history)
+      if rf_model is not None:
+          rf_prediction = predict_rf_improved(rf_model, history)
+          if rf_prediction is not None:
+              elapsed_time = time.time() - processStartTime.get(pid, time.time())
+              return max(rf_prediction - elapsed_time, 0)
     
     # Fallback to Average if RF not ready
     avg_burst_time = np.mean(history)
