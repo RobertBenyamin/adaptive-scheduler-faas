@@ -28,12 +28,12 @@ class SA_RF_CDD_Wrapper:
     def __init__(self):
         # Menggunakan AdaptiveRandomForestRegressor dari River
         # Ini mengimplementasikan Hoeffding Trees + ADWIN (Drift Detection) secara internal
-        # Sesuai dengan Bagian 4.2 dan 4.5 dokumen [cite: 121, 152]
         self.model = ensemble.AdaptiveRandomForestRegressor(
             n_models=10,      # Jumlah pohon (N)
             seed=42,
             grace_period=50,  # Ekuivalen dengan nmin sebelum split (Hoeffding Bound)
-            drift_detector=drift.ADWIN(delta=0.002) # Detektor Concept Drift
+            drift_detector=drift.ADWIN(delta=0.002), # Detektor Concept Drift
+            disable_weighted_vote=False # Aktifkan weighted voting
         )
         
     def extract_features(self, history, current_arrival_time, last_arrival):
@@ -79,13 +79,11 @@ class SA_RF_CDD_Wrapper:
 
     def predict(self, history, current_arrival_time, last_arrival):
         features = self.extract_features(history, current_arrival_time, last_arrival)
-        # Prediksi Stream (sangat cepat, O(depth)) [cite: 178]
         return self.model.predict_one(features)
 
     def learn(self, history, current_arrival_time, last_arrival, actual_duration):
         # Reconstruct features saat event terjadi untuk training
         features = self.extract_features(history, current_arrival_time, last_arrival)
-        # Update model secara inkremental (O(1)) [cite: 202]
         self.model.learn_one(features, actual_duration)
 
 
@@ -401,7 +399,6 @@ def waitTermination(childPid):
             history_context = processExecutionHistory[FUNCTION_HISTORY_KEY]
             
             # Latih model dengan data yang baru saja terjadi
-            # Ini memenuhi syarat update asinkron O(1) [cite: 202]
             sa_rf_cdd_model.learn(
                 history_context, 
                 processStartTime[childPid], # Gunakan waktu mulai asli sebagai arrival konteks
