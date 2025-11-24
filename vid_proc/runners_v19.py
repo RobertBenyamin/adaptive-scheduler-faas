@@ -38,42 +38,88 @@ class SA_RF_CDD_Wrapper:
         
     def extract_features(self, history, current_arrival_time, last_arrival):
         """
-        Mengubah raw history menjadi fitur sesuai Tabel 4.3 
-        Fitur: Lags, Window Stats, Volatility, Delta, Inter-Arrival
+        Mengubah raw history menjadi fitur yang diperkaya (Extended Features).
+        Tujuannya agar RF bisa menangkap pola jangka panjang (Long-term dependency)
+        seperti yang dilakukan LSTM.
         """
-        if len(history) < 10:
-            # Cold start handling: return default safe features
+        # Pastikan history cukup panjang untuk fitur extended
+        # Jika data masih sedikit (Cold Start), return fitur minimal/default
+        if len(history) < 20:
+            # Fallback simpel agar tidak error saat awal eksekusi
+            safe_mean = np.mean(history) if history else 0
             return {
-                "lag_1": 0, "lag_2": 0, "lag_3": 0,
-                "mean_5": 0, "std_10": 0,
-                "delta_1_2": 0,
+                "lag_1": history[-1] if len(history) > 0 else 0,
+                "lag_2": history[-2] if len(history) > 1 else 0,
+                "mean_5": safe_mean,
+                "mean_20": safe_mean,
+                "std_10": 0,
+                "min_20": safe_mean,
+                "max_20": safe_mean,
+                "ewm_10": safe_mean,
+                "trend_5": 0,
                 "inter_arrival": 0
             }
 
-        # 1. Lag Features (Autokorelasi)
+        # --- 1. Short-term Lag Features (Autokorelasi Jangka Pendek) ---
         lag_1 = history[-1]
         lag_2 = history[-2]
         lag_3 = history[-3]
+        
+        # --- 2. Long-term Lag Features (Autokorelasi Jangka Panjang) ---
+        # LSTM unggul karena memory panjang, kita coba mimic dengan lag jauh
+        lag_5  = history[-5]
+        lag_10 = history[-10]
+        lag_20 = history[-20] # Menangkap pola siklus yang lebih jauh
 
-        # 2. Window Statistics (Tren Jangka Pendek)
+        # --- 3. Window Statistics (Tren & Distribusi) ---
+        # Short window (5 data terakhir)
         mean_5 = np.mean(history[-5:])
+        
+        # Medium window (10 data terakhir)
+        std_10 = np.std(history[-10:]) # Volatilitas
+        
+        # Long window (20 data terakhir) - Menangkap range global
+        window_20 = history[-20:]
+        mean_20 = np.mean(window_20)
+        max_20  = np.max(window_20)  # Deteksi spike/burst tinggi
+        min_20  = np.min(window_20)  # Deteksi idle/low load
 
-        # 3. Volatility Measures (Variabilitas)
-        std_10 = np.std(history[-10:])
+        # --- 4. Advanced Time-Series Features ---
+        
+        # a. Exponential Weighted Moving Average (EWM)
+        # Memberikan bobot lebih besar pada data terbaru secara eksponensial
+        # Pandas punya fungsi ewm, tapi kita pakai numpy manual untuk performa:
+        # Rumus simpel: EWM_t = alpha * x_t + (1-alpha) * EWM_t-1
+        # Kita aproksimasi dengan weighted average pada window 10 terakhir
+        weights = np.exp(np.linspace(-1., 0., 10))
+        weights /= weights.sum()
+        ewm_10 = np.dot(history[-10:], weights)
 
-        # 4. Delta Features (Akselerasi)
-        delta_1_2 = lag_1 - lag_2
+        # b. Simple Trend / Slope (Kemiringan)
+        # Menghitung perubahan rata-rata dalam 5 data terakhir (naik atau turun?)
+        trend_5 = (history[-1] - history[-5]) / 5.0 
 
-        # 5. Inter-Arrival Time (Indikator Kontensi)
+        # c. Inter-Arrival Time (Indikator Kontensi / Beban Request)
         inter_arrival = current_arrival_time - last_arrival
 
         return {
+            # Short Lags
             "lag_1": lag_1,
             "lag_2": lag_2,
             "lag_3": lag_3,
+            # Long Lags
+            "lag_5": lag_5,
+            "lag_10": lag_10,
+            "lag_20": lag_20,
+            # Statistics
             "mean_5": mean_5,
+            "mean_20": mean_20,
             "std_10": std_10,
-            "delta_1_2": delta_1_2,
+            "max_20": max_20,
+            "min_20": min_20,
+            # Advanced
+            "ewm_10": ewm_10,
+            "trend_5": trend_5,
             "inter_arrival": inter_arrival
         }
 
