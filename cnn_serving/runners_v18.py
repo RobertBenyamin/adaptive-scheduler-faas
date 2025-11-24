@@ -10,9 +10,12 @@ import signal
 import requests
 from threading import Thread
 from storage_helper import download_file, upload_file
-from sklearn.ensemble import RandomForestRegressor
+from river import ensemble
+from river import tree
+from river import drift
+from river import stats
+import math
 import heapq
-from collections import deque
 
 current_path = "/app/pythonAction"
 BETA = 0.3  # Weight for wait time
@@ -24,36 +27,103 @@ def signal_handler(sig, frame):
     serverSocket_.close()
     sys.exit(0)
 
-class AdaptiveRFModel:
-    def __init__(self, name, n_estimators, max_depth, window_size=20):
-        self.name = name
-        self.model = RandomForestRegressor(n_estimators=n_estimators, max_depth=max_depth, random_state=42)
-        self.window_size = window_size
-        self.history_X = deque(maxlen=window_size)
-        self.history_y = deque(maxlen=window_size)
-        self.error_window = deque(maxlen=window_size)
-        self.fitted = False
+class WAERF_Wrapper:
+    def __init__(self):
+        # MODEL 1: STABIL (Generalist)
+        # Adaptive Random Forest: Bagus untuk workload stabil/menengah
+        # Kita set weighted_vote aktif agar internal votingnya bagus
+        self.model_stable = ensemble.AdaptiveRandomForestRegressor(
+            n_models=10,
+            seed=42,
+            drift_detector=drift.ADWIN(delta=0.002),
+            disable_weighted_vote=False
+        )
 
-    def update(self, X, y):
-        # Update history
-        self.history_X.append(X)
-        self.history_y.append(y)
-        if len(self.history_X) >= 5:
-            self.model.fit(np.array(self.history_X).reshape(-1,1), np.array(self.history_y))
-            self.fitted = True
+        # MODEL 2: REAKTIF (Specialist)
+        # Hoeffding Adaptive Tree Regressor (Satu Pohon Saja)
+        # Satu pohon lebih cepat bereaksi terhadap outlier/spike dibanding hutan (forest)
+        # karena tidak ada proses averaging antar pohon.
+        self.model_reactive = tree.HoeffdingAdaptiveTreeRegressor(
+            grace_period=10,  # Grace period kecil agar cepat split/belajar
+            leaf_prediction='adaptive', # Bisa beralih linear/mean di daun
+            model_selector_decay=0.3    # Cepat melupakan history lama
+        )
 
-    def predict(self, X):
-        if self.fitted:
-            return self.model.predict(np.array([[X]]))[0]
-        else:
-            # fallback ke mean history jika belum cukup data
-            return np.mean(self.history_y) if self.history_y else 2.0
+        # MONITOR KONTEKS (Context Awareness)
+        # Kita perlu tahu: apakah workload sekarang sedang "Gila" (Volatile) atau "Tenang"?
+        self.volatility_tracker = stats.Var() # Melacak varians data
+        self.error_stable = stats.Mean()      # Track error model stabil
+        self.error_reactive = stats.Mean()    # Track error model reaktif
 
-    def update_error(self, pred, actual):
-        self.error_window.append(abs(pred-actual))
+    def extract_features(self, history, current_arrival_time, last_arrival):
+        # Gunakan fitur yang sudah diperbaiki sebelumnya (Lag & Window stats)
+        # Fitur ini tetap berguna untuk membantu model membedakan state
+        if len(history) < 5:
+             return {"lag_1": 0, "mean_5": 0, "std_5": 0}
+        
+        return {
+            "lag_1": history[-1],
+            "lag_2": history[-2],
+            "mean_5": np.mean(history[-5:]),
+            "std_5": np.std(history[-5:]), # Fitur penting untuk deteksi volatilitas
+            "inter_arrival": current_arrival_time - last_arrival
+        }
 
-    def get_mae(self):
-        return np.mean(self.error_window) if self.error_window else 100.0
+    def predict(self, history, current_arrival_time, last_arrival):
+        features = self.extract_features(history, current_arrival_time, last_arrival)
+        
+        # 1. Dapatkan prediksi dari kedua ahli
+        pred_stable = self.model_stable.predict_one(features)
+        pred_reactive = self.model_reactive.predict_one(features)
+
+        # 2. Context-Aware Weighting (Inti dari Modifikasi)
+        # Hitung Volatilitas (Standard Deviasi) saat ini
+        current_volatility = math.sqrt(self.volatility_tracker.get()) if self.volatility_tracker.get() > 0 else 0
+        
+        # Logika Adaptasi:
+        # Jika volatilitas tinggi -> Percaya Model Reaktif (HAT)
+        # Jika volatilitas rendah -> Percaya Model Stabil (ARF)
+        
+        # Kita gunakan fungsi sigmoid atau rasio error untuk weighting dinamis
+        # Disini kita pakai pendekatan berbasis performa terbaru (Inverse Error)
+        
+        eps = 1e-5
+        # Bobot berdasarkan keakuratan historis terbaru
+        w_stable = 1.0 / (self.error_stable.get() + eps)
+        w_reactive = 1.0 / (self.error_reactive.get() + eps)
+        
+        # Jika volatilitas melonjak, kita paksa boost bobot reaktif
+        if current_volatility > 2.0: # Threshold bisa disesuaikan dengan skala data Anda
+            w_reactive *= 2.0 
+
+        # Normalisasi bobot
+        total_weight = w_stable + w_reactive
+        w_stable /= total_weight
+        w_reactive /= total_weight
+
+        # Prediksi Akhir: Kombinasi Linear
+        final_pred = (pred_stable * w_stable) + (pred_reactive * w_reactive)
+        
+        return final_pred
+
+    def learn(self, history, current_arrival_time, last_arrival, actual_duration):
+        features = self.extract_features(history, current_arrival_time, last_arrival)
+        
+        # 1. Prediksi dulu untuk hitung error (Prequential Evaluation)
+        p_stable = self.model_stable.predict_one(features)
+        p_reactive = self.model_reactive.predict_one(features)
+        
+        # 2. Update Tracker Error (Menggunakan Absolute Error)
+        self.error_stable.update(abs(p_stable - actual_duration))
+        self.error_reactive.update(abs(p_reactive - actual_duration))
+        
+        # 3. Update Tracker Volatilitas
+        self.volatility_tracker.update(actual_duration)
+
+        # 4. Latih kedua model
+        self.model_stable.learn_one(features, actual_duration)
+        self.model_reactive.learn_one(features, actual_duration)
+
 
 class PrintHook:
     def __init__(self, out=1):
@@ -142,11 +212,8 @@ responseMapWindows = []  # map from pid to response
 
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
-rf_models = [
-    AdaptiveRFModel('light', n_estimators=5, max_depth=3),
-    AdaptiveRFModel('standard', n_estimators=10, max_depth=5),
-    AdaptiveRFModel('deep', n_estimators=20, max_depth=8)
-]
+last_arrival_time = 0  # Untuk fitur Inter-Arrival Time
+sa_rf_cdd_model = WAERF_Wrapper()
 
 # The function to update the core nums by request.
 def updateThread():
@@ -273,22 +340,6 @@ def calculate_ewma(history, alpha=0.8):
         ewma = alpha * val + (1 - alpha) * ewma
     return ewma
 
-# Model Training (Random Forest)
-def train_models(history):
-    if len(history) < 5:  # Butuh minimal 5 data untuk regresi
-        return np.mean(history), np.mean(history)
-
-    X = np.array(range(len(history))).reshape(-1, 1)
-    y = np.array(history)
-
-    # Model Random Forest
-    rf_model = RandomForestRegressor(n_estimators=10, random_state=42)
-    rf_model.fit(X, y)
-    rf_pred = rf_model.predict([[len(history)]])[
-        0]  # Prediksi waktu berikutnya
-
-    return rf_pred
-
 
 # Parameter Mitigasi Ketidakpastian
 ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
@@ -297,35 +348,36 @@ BETA_RT = 0.3   # Faktor penalti standar deviasi
 # Fungsi Menghitung Remaining Time
 def calculate_remaining_time(pid):
     """
-    Menghitung sisa waktu eksekusi menggunakan Weighted Adaptive Random Forest.
+    Menghitung sisa waktu menggunakan SA-RF-CDD (Stream-Based).
+    Menggantikan metode batch training lama.
     """
+    global last_arrival_time
+    
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
+    
+    # --- LOGIKA LAMA DIHAPUS ---
+    # rf_pred = train_models(history) 
+    # ---------------------------
 
+    # --- LOGIKA BARU (SA-RF-CDD) ---
     if not history:
-        # Gunakan initial burst time jika belum ada histori
-        # Default 2 detik jika tidak ditemukan
         initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
         return initial_burst
 
-    # Prediksi via semua model, hitung bobot dari MAE
-    model_preds = []
-    weights = []
-    current_X = len(history)
-    epsilon = 1e-3
+    # Prediksi burst time total menggunakan model stream
+    # Kita menggunakan arrival time saat ini sebagai estimasi konteks
+    predicted_burst = sa_rf_cdd_model.predict(
+        history, 
+        time.time(), 
+        last_arrival_time
+    )
+    # -------------------------------
 
-    for m in rf_models:
-        pred = m.predict(current_X)
-        model_preds.append(pred)
-        mae = m.get_mae()
-        weights.append(1.0 / (mae + epsilon))
-
-    # Normalisasi bobot
-    weights_sum = sum(weights)
-    norm_weights = [w / weights_sum for w in weights] if weights_sum > 0 else [1/len(weights)]*len(weights)
-    final_pred = sum(p * w for p, w in zip(model_preds, norm_weights))
-
+    # Hitung waktu yang sudah berjalan
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
-    remaining_time = max(final_pred - elapsed_time, 0)
+
+    # Estimasi Sisa Waktu
+    remaining_time = max(predicted_burst - elapsed_time, 0)
 
     return remaining_time
 
@@ -366,38 +418,38 @@ PREEMPTION_THRESHOLD = 4
 
 
 def waitTermination(childPid):
-    """
-    Menunggu proses selesai atau menggantinya jika ada proses lebih prioritas dengan preemption.
-    """
-    global processQueue, mapPIDtoStatus
-
-    os.waitpid(childPid, 0)  # Tunggu hingga proses selesai
+    global processQueue, mapPIDtoStatus, last_arrival_time
+    
+    # Tunggu hingga proses selesai
+    _, status = os.waitpid(childPid, 0) 
 
     lockPIDMap.acquire()
 
     try:
-        # Hapus proses dari status map
         mapPIDtoStatus.pop(childPid, None)
-
-        # Simpan burst time ke history
+        
         if childPid in processStartTime:
-            elapsed = time.time() - processStartTime[childPid]
+            actual_duration = time.time() - processStartTime[childPid]
+            
+            # --- SA-RF-CDD LEARNING STEP ---
+            # Kita melakukan update model (partial_fit/learn_one) di sini.
+            # Mengambil history SEBELUM nilai baru ditambahkan untuk fitur training
+            history_context = processExecutionHistory[FUNCTION_HISTORY_KEY]
+            
+            # Latih model dengan data yang baru saja terjadi
+            sa_rf_cdd_model.learn(
+                history_context, 
+                processStartTime[childPid], # Gunakan waktu mulai asli sebagai arrival konteks
+                last_arrival_time
+            )
+            # -------------------------------
 
-            # Use the constant key to aggregate history for the function
-            processExecutionHistory[FUNCTION_HISTORY_KEY].append(elapsed)
-
-            # Training (online update) ke semua RF model
-            for i, m in enumerate(rf_models):
-                X_new = len(m.history_X)  # gunakan posisi data sebagai fitur waktu
-                y_new = elapsed
-                m.update(X_new, y_new)
-                # update window error (gunakan prediksi pada data baru)
-                pred_val = m.predict(X_new)
-                m.update_error(pred_val, y_new)
-                # Optional: DRIFT DETECTION
-                if len(m.error_window) == m.window_size and m.get_mae() > 2.5 * np.std(m.error_window):  # threshold bisa diatur
-                    print(f"[DRIFT] Model {m.name} replaced (error spike detected)")
-                    rf_models[i] = AdaptiveRFModel(m.name, m.model.n_estimators, m.model.max_depth, m.window_size)
+            # Setelah belajar, baru tambahkan ke histori
+            processExecutionHistory[FUNCTION_HISTORY_KEY].append(actual_duration)
+            
+            # Limit history size agar memori tidak bocor (optional, river handled this internally but good for features)
+            if len(processExecutionHistory[FUNCTION_HISTORY_KEY]) > 1000:
+                processExecutionHistory[FUNCTION_HISTORY_KEY].pop(0)
 
     except Exception as e:
         print(f"Error removing process {childPid}: {e}")
@@ -624,6 +676,7 @@ def run():
     global affinity_mask
     global processQueue
     global processStartTime
+    global last_arrival_time
 
     # Set the core of mxcontainer
     numCores = 8
@@ -667,6 +720,8 @@ def run():
 
         (clientSocket, address) = serverSocket.accept()
         print("Accept a new connection from %s" % str(address), flush=True)
+
+        current_arrival = time.time()
 
         data_ = b''
 
@@ -790,6 +845,9 @@ def run():
         childProcess = os.fork()
         if childProcess != 0:
             responseMapWindows.append([childProcess, [time.time(), -1]])
+
+            # --- UPDATE GLOBAL ARRIVAL TIME ---
+            last_arrival_time = current_arrival
 
         if childProcess == 0:
             # This is the child process: run the function and exit
