@@ -12,6 +12,7 @@ from threading import Thread
 from storage_helper import download_file, upload_file
 from river import ensemble
 from river import drift
+from river import utils
 import heapq
 
 current_path = "/app/pythonAction"
@@ -29,10 +30,11 @@ class SA_RF_CDD_Wrapper:
         # Menggunakan AdaptiveRandomForestRegressor dari River
         # Ini mengimplementasikan Hoeffding Trees + ADWIN (Drift Detection) secara internal
         self.model = ensemble.AdaptiveRandomForestRegressor(
-            n_models=10,      # Jumlah pohon (N)
+            n_models=30,      # Jumlah pohon (N)
             seed=42,
-            grace_period=50,  # Ekuivalen dengan nmin sebelum split (Hoeffding Bound)
-            drift_detector=drift.ADWIN(delta=0.002), # Detektor Concept Drift
+            grace_period=20,  # Ekuivalen dengan nmin sebelum split (Hoeffding Bound)
+            drift_detector=drift.ADWIN(delta=0.001), # Detektor Concept Drift
+            metric=utils.math.MAE(),
             disable_weighted_vote=False # Aktifkan weighted voting
         )
         
