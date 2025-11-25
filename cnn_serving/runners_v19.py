@@ -12,10 +12,8 @@ from threading import Thread
 from storage_helper import download_file, upload_file
 from river import ensemble
 from river import drift
-from river import utils
 from river import preprocessing
 from river import compose
-from river import stats
 import heapq
 
 current_path = "/app/pythonAction"
@@ -28,99 +26,81 @@ def signal_handler(sig, frame):
     serverSocket_.close()
     sys.exit(0)
 
-# 19v4
-class Hybrid_Adaptive_Model:
+# 19v5
+class SARF_Wrapper:
     def __init__(self):
-        # ------------------------------------------------------------------
-        # MODEL 1: SI STABIL (Untuk Workload Berat/Noisy)
-        # Konfigurasi: Standard RF, banyak pohon, prediksi rata-rata (Mean)
-        # ------------------------------------------------------------------
-        self.model_stable = ensemble.AdaptiveRandomForestRegressor(
-            n_models=20,           # Cukup 20 agar tidak terlalu berat
-            seed=42,
-            grace_period=20,       # Cepat update struktur
-            drift_detector=drift.ADWIN(delta=0.001),
-            metric=utils.math.MAE(),
-            disable_weighted_vote=False,
-            leaf_prediction='mean' # KUNCI: Pakai rata-rata agar tahan banting di heavy load
-        )
-
-        # ------------------------------------------------------------------
-        # MODEL 2: SI CERDAS (Untuk Workload Ringan/Trending)
-        # Konfigurasi: Linear Leaves, butuh scaling input
-        # ------------------------------------------------------------------
-        self.model_smart = compose.Pipeline(
+        # KITA HANYA PAKAI SATU MODEL: MODEL "SMART"
+        # Karena dia punya potensi akurasi tertinggi (Linear Regression di daun).
+        # Kelemahannya (over-reactive) akan kita handle secara manual saat fungsi predict().
+        
+        self.model = compose.Pipeline(
             preprocessing.StandardScaler(),
             ensemble.AdaptiveRandomForestRegressor(
-                n_models=10,           # Lebih sedikit pohon oke karena linear leaf sudah powerful
+                n_models=20,           # Jumlah moderat untuk balance speed/accuracy
                 seed=42,
-                grace_period=50,       # Butuh data lebih banyak biar regresi linear stabil
+                grace_period=50,       # Butuh data agak banyak biar regresi linear stabil
                 drift_detector=drift.ADWIN(delta=0.001),
-                disable_weighted_vote=False,
-                leaf_prediction='adaptive' # KUNCI: Pakai regresi linear untuk pola halus
+                disable_weighted_vote=False, # Weighted vote aktif
+                leaf_prediction='adaptive'   # KUNCI: Tetap pakai Adaptive/Linear
             )
         )
 
-        # Tracker Volatilitas untuk penentuan bobot otomatis
-        self.volatility = stats.Var()
-
     def extract_features(self, history, current_arrival_time, last_arrival):
-        # Fitur standar yang sudah terbukti cukup
+        # Fitur standar
         if len(history) < 5:
-             return {"lag_1": 0, "lag_2": 0, "mean_5": 0, "std_5": 0, "inter_arrival": 0}
+             return {"lag_1": 0, "mean_5": 0, "std_5": 0, "trend": 0, "inter_arrival": 0}
+        
+        trend = history[-1] - history[-5]
         
         return {
             "lag_1": history[-1],
             "lag_2": history[-2],
             "mean_5": np.mean(history[-5:]),
             "std_5": np.std(history[-5:]),
+            "trend": trend,
             "inter_arrival": current_arrival_time - last_arrival
         }
 
     def predict(self, history, current_arrival_time, last_arrival):
+        # 1. Minta Model Smart memprediksi
         features = self.extract_features(history, current_arrival_time, last_arrival)
+        raw_prediction = self.model.predict_one(features)
         
-        # 1. Ambil prediksi kedua ahli
-        pred_stable = self.model_stable.predict_one(features)
-        pred_smart  = self.model_smart.predict_one(features)
+        # 2. SAFETY GUARD (Pengaman Manual)
+        # Kita hitung batas "kewajaran" berdasarkan history singkat (misal 10 data terakhir)
+        if len(history) < 5:
+            return raw_prediction
+            
+        recent_window = history[-10:] # Ambil 10 data terakhir
+        recent_mean = np.mean(recent_window)
+        recent_std = np.std(recent_window)
         
-        # 2. Cek Volatilitas Data Terakhir
-        # Jika std_dev (akar varians) tinggi, berarti workload berat/kacau
-        current_std = (self.volatility.get() ** 0.5) if self.volatility.get() > 0 else 0
+        # Jika std 0 (data flat), set minimal kecil biar tidak error bagi 0
+        if recent_std == 0: recent_std = 0.001
         
-        # 3. Dynamic Blending (Pencampuran Dinamis)
-        # Threshold ini empiris: misal deviasi di atas 50ms dianggap 'Berat'
-        # Anda bisa sesuaikan angka 50.0 ini dengan rata-rata burst time di data Anda.
+        # Tentukan Threshold 'Explosion'
+        # Jika prediksi menyimpang > 3 sigma (3x Standar Deviasi) dari rata-rata, 
+        # kemungkinan besar regresi linearnya sedang 'halu' karena noise.
+        upper_bound = recent_mean + (3.0 * recent_std)
+        lower_bound = recent_mean - (3.0 * recent_std)
         
-        # Jika Volatilitas RENDAH (< 20.0) -> Kita lebih percaya Si Cerdas (Smart)
-        # Jika Volatilitas TINGGI (> 20.0) -> Kita geser kepercaaan ke Si Stabil (Stable)
-        
-        # Logika Sigmoid Sederhana:
-        # weight_stable akan mendekati 1 jika std tinggi, mendekati 0 jika std rendah
-        # Gunakan fungsi Tanh agar transisi halus
-        
-        # Normalisasi std ke range 0-1 (asumsi max std wajar sekitar 100)
-        normalized_std = min(current_std / 100.0, 1.0) 
-        
-        # Bobot Si Stabil naik seiring naiknya volatilitas
-        w_stable = 0.3 + (0.7 * normalized_std) 
-        w_stable = min(w_stable, 0.9) # Cap max 90% stable
-        
-        w_smart = 1.0 - w_stable
-        
-        final_pred = (pred_stable * w_stable) + (pred_smart * w_smart)
-        
-        return final_pred
+        # LOGIKA PEMILIHAN (The Switch):
+        if lower_bound <= raw_prediction <= upper_bound:
+            # Prediksi masih masuk akal -> Pakai Linear Prediction (Smart)
+            # Ini menangkap tren yang wajar.
+            return raw_prediction
+        else:
+            # Prediksi meledak/liar -> Potong dan ganti dengan Recent Mean (Safe)
+            # Ini menyelamatkan performa di workload berat/noisy.
+            # Kita lakukan 'Clipping'
+            if raw_prediction > upper_bound:
+                return upper_bound # Atau return recent_mean
+            else:
+                return lower_bound # Atau return recent_mean
 
     def learn(self, history, current_arrival_time, last_arrival, actual_duration):
         features = self.extract_features(history, current_arrival_time, last_arrival)
-        
-        # Update pengetahuan kedua model
-        self.model_stable.learn_one(features, actual_duration)
-        self.model_smart.learn_one(features, actual_duration)
-        
-        # Update tracker volatilitas
-        self.volatility.update(actual_duration)
+        self.model.learn_one(features, actual_duration)
 
 
 class PrintHook:
@@ -211,7 +191,7 @@ responseMapWindows = []  # map from pid to response
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 last_arrival_time = 0  # Untuk fitur Inter-Arrival Time
-sa_rf_cdd_model = Hybrid_Adaptive_Model()
+sa_rf_cdd_model = SARF_Wrapper()
 
 # The function to update the core nums by request.
 def updateThread():
