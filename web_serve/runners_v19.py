@@ -13,6 +13,9 @@ from storage_helper import download_file, upload_file
 from river import ensemble
 from river import drift
 from river import utils
+from river import preprocessing
+from river import compose
+from river import stats
 import heapq
 
 current_path = "/app/pythonAction"
@@ -25,68 +28,98 @@ def signal_handler(sig, frame):
     serverSocket_.close()
     sys.exit(0)
 
-class SA_RF_CDD_Wrapper:
+class Hybrid_Adaptive_Model:
     def __init__(self):
-        # Menggunakan AdaptiveRandomForestRegressor dari River
-        # Ini mengimplementasikan Hoeffding Trees + ADWIN (Drift Detection) secara internal
-        self.model = ensemble.AdaptiveRandomForestRegressor(
-            n_models=30,      # Jumlah pohon (N)
+        # ------------------------------------------------------------------
+        # MODEL 1: SI STABIL (Untuk Workload Berat/Noisy)
+        # Konfigurasi: Standard RF, banyak pohon, prediksi rata-rata (Mean)
+        # ------------------------------------------------------------------
+        self.model_stable = ensemble.AdaptiveRandomForestRegressor(
+            n_models=20,           # Cukup 20 agar tidak terlalu berat
             seed=42,
-            grace_period=20,  # Ekuivalen dengan nmin sebelum split (Hoeffding Bound)
-            drift_detector=drift.ADWIN(delta=0.001), # Detektor Concept Drift
+            grace_period=20,       # Cepat update struktur
+            drift_detector=drift.ADWIN(delta=0.001),
             metric=utils.math.MAE(),
-            disable_weighted_vote=False # Aktifkan weighted voting
+            disable_weighted_vote=False,
+            leaf_prediction='mean' # KUNCI: Pakai rata-rata agar tahan banting di heavy load
         )
-        
+
+        # ------------------------------------------------------------------
+        # MODEL 2: SI CERDAS (Untuk Workload Ringan/Trending)
+        # Konfigurasi: Linear Leaves, butuh scaling input
+        # ------------------------------------------------------------------
+        self.model_smart = compose.Pipeline(
+            preprocessing.StandardScaler(),
+            ensemble.AdaptiveRandomForestRegressor(
+                n_models=10,           # Lebih sedikit pohon oke karena linear leaf sudah powerful
+                seed=42,
+                grace_period=50,       # Butuh data lebih banyak biar regresi linear stabil
+                drift_detector=drift.ADWIN(delta=0.001),
+                disable_weighted_vote=False,
+                leaf_prediction='adaptive' # KUNCI: Pakai regresi linear untuk pola halus
+            )
+        )
+
+        # Tracker Volatilitas untuk penentuan bobot otomatis
+        self.volatility = stats.Var()
+
     def extract_features(self, history, current_arrival_time, last_arrival):
-        """
-        Mengubah raw history menjadi fitur sesuai Tabel 4.3 
-        Fitur: Lags, Window Stats, Volatility, Delta, Inter-Arrival
-        """
-        if len(history) < 10:
-            # Cold start handling: return default safe features
-            return {
-                "lag_1": 0, "lag_2": 0, "lag_3": 0,
-                "mean_5": 0, "std_10": 0,
-                "delta_1_2": 0,
-                "inter_arrival": 0
-            }
-
-        # 1. Lag Features (Autokorelasi)
-        lag_1 = history[-1]
-        lag_2 = history[-2]
-        lag_3 = history[-3]
-
-        # 2. Window Statistics (Tren Jangka Pendek)
-        mean_5 = np.mean(history[-5:])
-
-        # 3. Volatility Measures (Variabilitas)
-        std_10 = np.std(history[-10:])
-
-        # 4. Delta Features (Akselerasi)
-        delta_1_2 = lag_1 - lag_2
-
-        # 5. Inter-Arrival Time (Indikator Kontensi)
-        inter_arrival = current_arrival_time - last_arrival
-
+        # Fitur standar yang sudah terbukti cukup
+        if len(history) < 5:
+             return {"lag_1": 0, "lag_2": 0, "mean_5": 0, "std_5": 0, "inter_arrival": 0}
+        
         return {
-            "lag_1": lag_1,
-            "lag_2": lag_2,
-            "lag_3": lag_3,
-            "mean_5": mean_5,
-            "std_10": std_10,
-            "delta_1_2": delta_1_2,
-            "inter_arrival": inter_arrival
+            "lag_1": history[-1],
+            "lag_2": history[-2],
+            "mean_5": np.mean(history[-5:]),
+            "std_5": np.std(history[-5:]),
+            "inter_arrival": current_arrival_time - last_arrival
         }
 
     def predict(self, history, current_arrival_time, last_arrival):
         features = self.extract_features(history, current_arrival_time, last_arrival)
-        return self.model.predict_one(features)
+        
+        # 1. Ambil prediksi kedua ahli
+        pred_stable = self.model_stable.predict_one(features)
+        pred_smart  = self.model_smart.predict_one(features)
+        
+        # 2. Cek Volatilitas Data Terakhir
+        # Jika std_dev (akar varians) tinggi, berarti workload berat/kacau
+        current_std = (self.volatility.get() ** 0.5) if self.volatility.get() > 0 else 0
+        
+        # 3. Dynamic Blending (Pencampuran Dinamis)
+        # Threshold ini empiris: misal deviasi di atas 50ms dianggap 'Berat'
+        # Anda bisa sesuaikan angka 50.0 ini dengan rata-rata burst time di data Anda.
+        
+        # Jika Volatilitas RENDAH (< 20.0) -> Kita lebih percaya Si Cerdas (Smart)
+        # Jika Volatilitas TINGGI (> 20.0) -> Kita geser kepercaaan ke Si Stabil (Stable)
+        
+        # Logika Sigmoid Sederhana:
+        # weight_stable akan mendekati 1 jika std tinggi, mendekati 0 jika std rendah
+        # Gunakan fungsi Tanh agar transisi halus
+        
+        # Normalisasi std ke range 0-1 (asumsi max std wajar sekitar 100)
+        normalized_std = min(current_std / 100.0, 1.0) 
+        
+        # Bobot Si Stabil naik seiring naiknya volatilitas
+        w_stable = 0.3 + (0.7 * normalized_std) 
+        w_stable = min(w_stable, 0.9) # Cap max 90% stable
+        
+        w_smart = 1.0 - w_stable
+        
+        final_pred = (pred_stable * w_stable) + (pred_smart * w_smart)
+        
+        return final_pred
 
     def learn(self, history, current_arrival_time, last_arrival, actual_duration):
-        # Reconstruct features saat event terjadi untuk training
         features = self.extract_features(history, current_arrival_time, last_arrival)
-        self.model.learn_one(features, actual_duration)
+        
+        # Update pengetahuan kedua model
+        self.model_stable.learn_one(features, actual_duration)
+        self.model_smart.learn_one(features, actual_duration)
+        
+        # Update tracker volatilitas
+        self.volatility.update(actual_duration)
 
 
 class PrintHook:
@@ -177,7 +210,7 @@ responseMapWindows = []  # map from pid to response
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 last_arrival_time = 0  # Untuk fitur Inter-Arrival Time
-sa_rf_cdd_model = SA_RF_CDD_Wrapper()
+sa_rf_cdd_model = Hybrid_Adaptive_Model()
 
 # The function to update the core nums by request.
 def updateThread():
