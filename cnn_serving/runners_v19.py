@@ -28,6 +28,7 @@ def signal_handler(sig, frame):
     serverSocket_.close()
     sys.exit(0)
 
+# 19v4
 class Hybrid_Adaptive_Model:
     def __init__(self):
         # ------------------------------------------------------------------
