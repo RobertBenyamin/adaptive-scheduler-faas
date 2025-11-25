@@ -12,6 +12,8 @@ from threading import Thread
 from storage_helper import download_file, upload_file
 from river import ensemble
 from river import drift
+from river import preprocessing
+from river import compose
 from river import utils
 import heapq
 
@@ -25,58 +27,77 @@ def signal_handler(sig, frame):
     serverSocket_.close()
     sys.exit(0)
 
-# 19v3
-class SA_RF_CDD_Wrapper:
+# 19v6
+class UnifiedAdaptiveModel:
     def __init__(self):
-        # Menggunakan AdaptiveRandomForestRegressor dari River
-        # Ini mengimplementasikan Hoeffding Trees + ADWIN (Drift Detection) secara internal
-        self.model = ensemble.AdaptiveRandomForestRegressor(
-            n_models=30,      # Jumlah pohon (N)
-            seed=42,
-            grace_period=20,  # Ekuivalen dengan nmin sebelum split (Hoeffding Bound)
-            drift_detector=drift.ADWIN(delta=0.001), # Detektor Concept Drift
-            metric=utils.math.MAE(),
-            disable_weighted_vote=False # Aktifkan weighted voting
+        """
+        Unified Model: Menggabungkan stabilitas untuk workload berat 
+        dan kemampuan tracking trend untuk workload ringan.
+        """
+        self.model = compose.Pipeline(
+            # 1. Scaling: Wajib untuk Linear Regression di daun pohon
+            preprocessing.StandardScaler(),
+            
+            # 2. Adaptive Random Forest
+            ensemble.AdaptiveRandomForestRegressor(
+                n_models=25,      # Balance antara kecepatan (20) dan stabilitas ensemble (30)
+                seed=42,
+                
+                # 'adaptive': Paling Krusial. 
+                # Secara internal memilih antara Mean (V1) dan Linear (V2) 
+                # berdasarkan mana yang error-nya lebih kecil pada runtime.
+                leaf_prediction='adaptive', 
+                
+                # Grace period menengah. 
+                # Tidak terlalu sensitif (noise) tapi tidak terlalu lambat (drift).
+                grace_period=15,
+                
+                drift_detector=drift.ADWIN(delta=0.001),
+                metric=utils.math.MAE(),
+                disable_weighted_vote=False
+            )
         )
-        
+
     def extract_features(self, history, current_arrival_time, last_arrival):
         """
-        Mengubah raw history menjadi fitur sesuai Tabel 4.3 
-        Fitur: Lags, Window Stats, Volatility, Delta, Inter-Arrival
+        Hybrid Feature Extraction:
+        Mengambil 'Delta' dari V1 (deteksi shock/spike)
+        dan 'Trend' dari V2 (deteksi pola linear).
         """
-        if len(history) < 10:
-            # Cold start handling: return default safe features
+        if len(history) < 5:
             return {
-                "lag_1": 0, "lag_2": 0, "lag_3": 0,
-                "mean_5": 0, "std_10": 0,
-                "delta_1_2": 0,
+                "lag_1": 0, "lag_2": 0, "mean_5": 0, 
+                "std_5": 0, "delta": 0, "trend": 0, 
                 "inter_arrival": 0
             }
 
-        # 1. Lag Features (Autokorelasi)
+        # Fitur Dasar
         lag_1 = history[-1]
         lag_2 = history[-2]
-        lag_3 = history[-3]
+        
+        # Window Statistics (Short term stability)
+        window_view = history[-5:]
+        mean_5 = np.mean(window_view)
+        std_5 = np.std(window_view)
 
-        # 2. Window Statistics (Tren Jangka Pendek)
-        mean_5 = np.mean(history[-5:])
+        # Fitur V1: Delta (Akselerasi Instan)
+        # Sangat berguna saat terjadi contention mendadak (Heavy Load)
+        delta = lag_1 - lag_2
 
-        # 3. Volatility Measures (Variabilitas)
-        std_10 = np.std(history[-10:])
+        # Fitur V2: Trend (Slope Sederhana)
+        # Sangat berguna untuk pola naik/turun yang bersih (Light Load)
+        trend = lag_1 - history[-5]
 
-        # 4. Delta Features (Akselerasi)
-        delta_1_2 = lag_1 - lag_2
-
-        # 5. Inter-Arrival Time (Indikator Kontensi)
+        # Context Feature
         inter_arrival = current_arrival_time - last_arrival
 
         return {
             "lag_1": lag_1,
             "lag_2": lag_2,
-            "lag_3": lag_3,
             "mean_5": mean_5,
-            "std_10": std_10,
-            "delta_1_2": delta_1_2,
+            "std_5": std_5,
+            "delta": delta,    # Representasi V1
+            "trend": trend,    # Representasi V2
             "inter_arrival": inter_arrival
         }
 
@@ -85,7 +106,6 @@ class SA_RF_CDD_Wrapper:
         return self.model.predict_one(features)
 
     def learn(self, history, current_arrival_time, last_arrival, actual_duration):
-        # Reconstruct features saat event terjadi untuk training
         features = self.extract_features(history, current_arrival_time, last_arrival)
         self.model.learn_one(features, actual_duration)
 
@@ -178,7 +198,7 @@ responseMapWindows = []  # map from pid to response
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 last_arrival_time = 0  # Untuk fitur Inter-Arrival Time
-sa_rf_cdd_model = SA_RF_CDD_Wrapper()
+sa_rf_cdd_model = UnifiedAdaptiveModel()
 
 # The function to update the core nums by request.
 def updateThread():
