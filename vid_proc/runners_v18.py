@@ -11,9 +11,9 @@ import requests
 from threading import Thread
 from storage_helper import download_file, upload_file
 from river import ensemble
-from river import tree
 from river import drift
-from river import stats
+from river import preprocessing
+from river import compose
 import math
 import heapq
 
@@ -27,103 +27,69 @@ def signal_handler(sig, frame):
     serverSocket_.close()
     sys.exit(0)
 
-class WAERF_Wrapper:
+class Optimized_ARF_Wrapper:
     def __init__(self):
-        # MODEL 1: STABIL (Generalist)
-        # Adaptive Random Forest: Bagus untuk workload stabil/menengah
-        # Kita set weighted_vote aktif agar internal votingnya bagus
-        self.model_stable = ensemble.AdaptiveRandomForestRegressor(
-            n_models=10,
-            seed=42,
-            drift_detector=drift.ADWIN(delta=0.002),
-            disable_weighted_vote=False
+        # PENTING: Kita bungkus model dengan StandardScaler.
+        # Karena kita akan menggunakan Linear Regression di daun pohon ('adaptive'),
+        # data input WAJIB diskalakan agar konvergen.
+        self.model = compose.Pipeline(
+            preprocessing.StandardScaler(),
+            ensemble.AdaptiveRandomForestRegressor(
+                n_models=20,                  # Perbanyak pohon untuk smooth prediction (10 -> 20)
+                seed=42,
+                
+                # SETTING KUNCI UNTUK MENGALAHKAN LSTM:
+                # 1. leaf_prediction='adaptive': 
+                #    Setiap daun bisa memilih pakai Rata-rata ATAU Regresi Linear.
+                #    Ini memungkinkan RF menangkap TREND (seperti LSTM) dan STABILITAS (seperti RF).
+                leaf_prediction='adaptive',  
+                
+                # 2. Grace Period diperkecil:
+                #    Agar pohon lebih cepat melakukan split saat pola baru muncul.
+                grace_period=10,             
+                
+                # 3. Weighted Vote Aktif:
+                disable_weighted_vote=False, 
+                
+                # 4. Drift Detector tetap ADWIN
+                drift_detector=drift.ADWIN(delta=0.001) 
+            )
         )
-
-        # MODEL 2: REAKTIF (Specialist)
-        # Hoeffding Adaptive Tree Regressor (Satu Pohon Saja)
-        # Satu pohon lebih cepat bereaksi terhadap outlier/spike dibanding hutan (forest)
-        # karena tidak ada proses averaging antar pohon.
-        self.model_reactive = tree.HoeffdingAdaptiveTreeRegressor(
-            grace_period=10,  # Grace period kecil agar cepat split/belajar
-            leaf_prediction='adaptive', # Bisa beralih linear/mean di daun
-            model_selector_decay=0.3    # Cepat melupakan history lama
-        )
-
-        # MONITOR KONTEKS (Context Awareness)
-        # Kita perlu tahu: apakah workload sekarang sedang "Gila" (Volatile) atau "Tenang"?
-        self.volatility_tracker = stats.Var() # Melacak varians data
-        self.error_stable = stats.Mean()      # Track error model stabil
-        self.error_reactive = stats.Mean()    # Track error model reaktif
 
     def extract_features(self, history, current_arrival_time, last_arrival):
-        # Gunakan fitur yang sudah diperbaiki sebelumnya (Lag & Window stats)
-        # Fitur ini tetap berguna untuk membantu model membedakan state
-        if len(history) < 5:
-             return {"lag_1": 0, "mean_5": 0, "std_5": 0}
+        # Fitur Extended tetap dipakai karena membantu Linear Regression di daun
+        # untuk melihat slope/kemiringan.
         
+        if len(history) < 5:
+             # Cold start features
+             return {
+                 "lag_1": 0, "lag_2": 0, "lag_3": 0,
+                 "mean_5": 0, "std_5": 0,
+                 "trend": 0,
+                 "inter_arrival": 0
+             }
+        
+        # Hitung Trend Sederhana (Slope)
+        # (y_now - y_old)
+        trend = history[-1] - history[-5] 
+
         return {
             "lag_1": history[-1],
             "lag_2": history[-2],
+            "lag_3": history[-3],
             "mean_5": np.mean(history[-5:]),
-            "std_5": np.std(history[-5:]), # Fitur penting untuk deteksi volatilitas
+            "std_5": np.std(history[-5:]),
+            "trend": trend,  # Fitur ini sangat berguna buat Linear Leaf
             "inter_arrival": current_arrival_time - last_arrival
         }
 
     def predict(self, history, current_arrival_time, last_arrival):
         features = self.extract_features(history, current_arrival_time, last_arrival)
-        
-        # 1. Dapatkan prediksi dari kedua ahli
-        pred_stable = self.model_stable.predict_one(features)
-        pred_reactive = self.model_reactive.predict_one(features)
-
-        # 2. Context-Aware Weighting (Inti dari Modifikasi)
-        # Hitung Volatilitas (Standard Deviasi) saat ini
-        current_volatility = math.sqrt(self.volatility_tracker.get()) if self.volatility_tracker.get() > 0 else 0
-        
-        # Logika Adaptasi:
-        # Jika volatilitas tinggi -> Percaya Model Reaktif (HAT)
-        # Jika volatilitas rendah -> Percaya Model Stabil (ARF)
-        
-        # Kita gunakan fungsi sigmoid atau rasio error untuk weighting dinamis
-        # Disini kita pakai pendekatan berbasis performa terbaru (Inverse Error)
-        
-        eps = 1e-5
-        # Bobot berdasarkan keakuratan historis terbaru
-        w_stable = 1.0 / (self.error_stable.get() + eps)
-        w_reactive = 1.0 / (self.error_reactive.get() + eps)
-        
-        # Jika volatilitas melonjak, kita paksa boost bobot reaktif
-        if current_volatility > 2.0: # Threshold bisa disesuaikan dengan skala data Anda
-            w_reactive *= 2.0 
-
-        # Normalisasi bobot
-        total_weight = w_stable + w_reactive
-        w_stable /= total_weight
-        w_reactive /= total_weight
-
-        # Prediksi Akhir: Kombinasi Linear
-        final_pred = (pred_stable * w_stable) + (pred_reactive * w_reactive)
-        
-        return final_pred
+        return self.model.predict_one(features)
 
     def learn(self, history, current_arrival_time, last_arrival, actual_duration):
         features = self.extract_features(history, current_arrival_time, last_arrival)
-        
-        # 1. Prediksi dulu untuk hitung error (Prequential Evaluation)
-        p_stable = self.model_stable.predict_one(features)
-        p_reactive = self.model_reactive.predict_one(features)
-        
-        # 2. Update Tracker Error (Menggunakan Absolute Error)
-        self.error_stable.update(abs(p_stable - actual_duration))
-        self.error_reactive.update(abs(p_reactive - actual_duration))
-        
-        # 3. Update Tracker Volatilitas
-        self.volatility_tracker.update(actual_duration)
-
-        # 4. Latih kedua model
-        self.model_stable.learn_one(features, actual_duration)
-        self.model_reactive.learn_one(features, actual_duration)
-
+        self.model.learn_one(features, actual_duration)
 
 class PrintHook:
     def __init__(self, out=1):
@@ -213,7 +179,7 @@ responseMapWindows = []  # map from pid to response
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 last_arrival_time = 0  # Untuk fitur Inter-Arrival Time
-sa_rf_cdd_model = WAERF_Wrapper()
+sa_rf_cdd_model = Optimized_ARF_Wrapper()
 
 # The function to update the core nums by request.
 def updateThread():
