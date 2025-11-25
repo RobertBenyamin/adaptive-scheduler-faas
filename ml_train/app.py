@@ -12,8 +12,7 @@ warnings.filterwarnings("ignore")
 
 cleanup_re = re.compile('[^a-z]+')
 
-current_path = "/app/pythonAction"
-
+TMP_DIR = "/tmp/"
 
 def cleanup(sentence):
     sentence = sentence.lower()
@@ -23,15 +22,17 @@ def cleanup(sentence):
 df_name = 'minioDataset.csv'
 
 def lambda_handler(event):
-
     t1 = time.time()
     blobName = event.get("input_file", df_name)
-    download_file(blobName, f"{current_path}/{blobName}")
+    pid = str(os.getpid())
+    local_input_path = os.path.join(TMP_DIR, f"{pid}_{blobName}")
+    
+    download_file(blobName, local_input_path)
     
     t2 = time.time()
     print("Time 1 = " + str(t2-t1))
 
-    df = pd.read_csv(f"{current_path}/{blobName}")
+    df = pd.read_csv(local_input_path)
     df['train'] = df['Text'].apply(cleanup)
 
     model = LogisticRegression(max_iter=10)
@@ -41,11 +42,13 @@ def lambda_handler(event):
     t3 = time.time()
     print("Time 2 = " + str(t3-t2))
 
-    filename = 'finalized_model_'+str(os.getpid())+'.sav'
-    pickle.dump(model, open(filename, 'wb'))
+    output_filename = f'finalized_model_{pid}.sav'
+    local_output_path = os.path.join(TMP_DIR, output_filename)
 
-    blobName = 'finalized_model_'+str(os.getpid())+'.sav'
-    upload_file(f"{current_path}/{blobName}", blobName)
+    with open(local_output_path, 'wb') as f:
+        pickle.dump(model, f)
+
+    upload_file(local_output_path, output_filename)
     t4 = time.time()
     print("Time 3 = " + str(t4-t3))
 
