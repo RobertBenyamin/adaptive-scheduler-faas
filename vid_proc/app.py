@@ -2,40 +2,41 @@ import os
 import cv2
 from storage_helper import download_file, upload_file
 
-tmp = "/tmp/"
-current_path = "/app/pythonAction"
-
-vid_name = 'vid1.mp4'
-
-result_file_path = tmp + vid_name
+TMP_DIR = "/tmp/"
 
 def lambda_handler(event):
-    blobName = event.get("input_file", "vid1.mp4")
-    # dnld_blob.download_blob_new(blobName)
-    download_file(blobName, f"{current_path}/{blobName}")
-    video = cv2.VideoCapture("vid1_"+str(os.getpid())+".mp4")
+    input_filename = event.get("input_file", "vid1.mp4")
+    pid = str(os.getpid())
 
-    width = int(video.get(3))
-    height = int(video.get(4))
-    fourcc = cv2.VideoWriter_fourcc(*'MPEG')
-    out = cv2.VideoWriter('output_'+str(os.getpid())+'.avi',fourcc, 20.0, (width, height))
+    local_input_path = os.path.join(TMP_DIR, f"input_{pid}_{input_filename}")
+    local_output_path = os.path.join(TMP_DIR, f"output_{pid}.avi")
+    
+    download_file(input_filename, local_input_path)
+    video = cv2.VideoCapture(local_input_path)
+    if not video.isOpened():
+        return {"Error": "Could not open video file"}
 
-    while video.isOpened():
+    width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
+    height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    fps = video.get(cv2.CAP_PROP_FPS) or 20.0
+
+    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+    out = cv2.VideoWriter(local_output_path, fourcc, fps, (width, height), isColor=False)
+
+    while True:
         ret, frame = video.read()
-        if ret:
-            gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            tmp_file_path = tmp+'tmp'+str(os.getpid())+'.jpg'
-            cv2.imwrite(tmp_file_path, gray_frame)
-            gray_frame = cv2.imread(tmp_file_path)
-            out.write(gray_frame)
+        if not ret:
             break
-        else:
-            break
-
-    blobName = 'output_'+str(os.getpid())+'.avi'
-    upload_file(f"{current_path}/{blobName}", blobName)
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        out.write(gray_frame)
 
     video.release()
     out.release()
+
+    output_blob_name = f"processed_{pid}.avi"
+    upload_file(local_output_path, output_blob_name)
+
+    if os.path.exists(local_input_path): os.remove(local_input_path)
+    if os.path.exists(local_output_path): os.remove(local_output_path)
 
     return {"Video": "Done"}
