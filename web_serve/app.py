@@ -2,14 +2,16 @@ import os
 from storage_helper import download_file, upload_file
 
 
-current_path = "/app/pythonAction"
+current_path = "/tmp"
 
 def lambda_handler(event):
     blobName = event.get("input_file", "money.txt")
-    download_file(blobName, f"{current_path}/{blobName}")
+    local_path = f"{current_path}/{blobName}"
+    
+    download_file(blobName, local_path)
     
     # Read all lines (first line is balance, others are transaction history)
-    with open(f"{current_path}/{blobName}", "r") as moneyF:
+    with open(local_path, "r") as moneyF:
         lines = moneyF.readlines()
 
     # Parse balance from the first line
