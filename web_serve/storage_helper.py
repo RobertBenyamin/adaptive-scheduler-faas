@@ -2,7 +2,7 @@ import boto3
 import os
 
 # Nama bucket di S3
-BUCKET_NAME = 'faas-scheduler-data-0'
+BUCKET_NAME = 'faas-scheduler-data-1'
 
 # make s3 client, uncomment the following lines to use your own credentials
 s3_client = boto3.client(
