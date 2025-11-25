@@ -12,8 +12,7 @@ from threading import Thread
 from storage_helper import download_file, upload_file
 from river import ensemble
 from river import drift
-from river import preprocessing
-from river import compose
+from river import utils
 import heapq
 
 current_path = "/app/pythonAction"
@@ -26,79 +25,67 @@ def signal_handler(sig, frame):
     serverSocket_.close()
     sys.exit(0)
 
-# 19v5
-class SARF_Wrapper:
+# 19v3
+class SA_RF_CDD_Wrapper:
     def __init__(self):
-        # KITA HANYA PAKAI SATU MODEL: MODEL "SMART"
-        # Karena dia punya potensi akurasi tertinggi (Linear Regression di daun).
-        # Kelemahannya (over-reactive) akan kita handle secara manual saat fungsi predict().
-        
-        self.model = compose.Pipeline(
-            preprocessing.StandardScaler(),
-            ensemble.AdaptiveRandomForestRegressor(
-                n_models=20,           # Jumlah moderat untuk balance speed/accuracy
-                seed=42,
-                grace_period=50,       # Butuh data agak banyak biar regresi linear stabil
-                drift_detector=drift.ADWIN(delta=0.001),
-                disable_weighted_vote=False, # Weighted vote aktif
-                leaf_prediction='adaptive'   # KUNCI: Tetap pakai Adaptive/Linear
-            )
+        # Menggunakan AdaptiveRandomForestRegressor dari River
+        # Ini mengimplementasikan Hoeffding Trees + ADWIN (Drift Detection) secara internal
+        self.model = ensemble.AdaptiveRandomForestRegressor(
+            n_models=30,      # Jumlah pohon (N)
+            seed=42,
+            grace_period=20,  # Ekuivalen dengan nmin sebelum split (Hoeffding Bound)
+            drift_detector=drift.ADWIN(delta=0.001), # Detektor Concept Drift
+            metric=utils.math.MAE(),
+            disable_weighted_vote=False # Aktifkan weighted voting
         )
-
+        
     def extract_features(self, history, current_arrival_time, last_arrival):
-        # Fitur standar
-        if len(history) < 5:
-             return {"lag_1": 0, "mean_5": 0, "std_5": 0, "trend": 0, "inter_arrival": 0}
-        
-        trend = history[-1] - history[-5]
-        
+        """
+        Mengubah raw history menjadi fitur sesuai Tabel 4.3 
+        Fitur: Lags, Window Stats, Volatility, Delta, Inter-Arrival
+        """
+        if len(history) < 10:
+            # Cold start handling: return default safe features
+            return {
+                "lag_1": 0, "lag_2": 0, "lag_3": 0,
+                "mean_5": 0, "std_10": 0,
+                "delta_1_2": 0,
+                "inter_arrival": 0
+            }
+
+        # 1. Lag Features (Autokorelasi)
+        lag_1 = history[-1]
+        lag_2 = history[-2]
+        lag_3 = history[-3]
+
+        # 2. Window Statistics (Tren Jangka Pendek)
+        mean_5 = np.mean(history[-5:])
+
+        # 3. Volatility Measures (Variabilitas)
+        std_10 = np.std(history[-10:])
+
+        # 4. Delta Features (Akselerasi)
+        delta_1_2 = lag_1 - lag_2
+
+        # 5. Inter-Arrival Time (Indikator Kontensi)
+        inter_arrival = current_arrival_time - last_arrival
+
         return {
-            "lag_1": history[-1],
-            "lag_2": history[-2],
-            "mean_5": np.mean(history[-5:]),
-            "std_5": np.std(history[-5:]),
-            "trend": trend,
-            "inter_arrival": current_arrival_time - last_arrival
+            "lag_1": lag_1,
+            "lag_2": lag_2,
+            "lag_3": lag_3,
+            "mean_5": mean_5,
+            "std_10": std_10,
+            "delta_1_2": delta_1_2,
+            "inter_arrival": inter_arrival
         }
 
     def predict(self, history, current_arrival_time, last_arrival):
-        # 1. Minta Model Smart memprediksi
         features = self.extract_features(history, current_arrival_time, last_arrival)
-        raw_prediction = self.model.predict_one(features)
-        
-        # 2. SAFETY GUARD (Pengaman Manual)
-        # Kita hitung batas "kewajaran" berdasarkan history singkat (misal 10 data terakhir)
-        if len(history) < 5:
-            return raw_prediction
-            
-        recent_window = history[-10:] # Ambil 10 data terakhir
-        recent_mean = np.mean(recent_window)
-        recent_std = np.std(recent_window)
-        
-        # Jika std 0 (data flat), set minimal kecil biar tidak error bagi 0
-        if recent_std == 0: recent_std = 0.001
-        
-        # Tentukan Threshold 'Explosion'
-        # Jika prediksi menyimpang > 3 sigma (3x Standar Deviasi) dari rata-rata, 
-        # kemungkinan besar regresi linearnya sedang 'halu' karena noise.
-        upper_bound = recent_mean + (3.0 * recent_std)
-        lower_bound = recent_mean - (3.0 * recent_std)
-        
-        # LOGIKA PEMILIHAN (The Switch):
-        if lower_bound <= raw_prediction <= upper_bound:
-            # Prediksi masih masuk akal -> Pakai Linear Prediction (Smart)
-            # Ini menangkap tren yang wajar.
-            return raw_prediction
-        else:
-            # Prediksi meledak/liar -> Potong dan ganti dengan Recent Mean (Safe)
-            # Ini menyelamatkan performa di workload berat/noisy.
-            # Kita lakukan 'Clipping'
-            if raw_prediction > upper_bound:
-                return upper_bound # Atau return recent_mean
-            else:
-                return lower_bound # Atau return recent_mean
+        return self.model.predict_one(features)
 
     def learn(self, history, current_arrival_time, last_arrival, actual_duration):
+        # Reconstruct features saat event terjadi untuk training
         features = self.extract_features(history, current_arrival_time, last_arrival)
         self.model.learn_one(features, actual_duration)
 
@@ -191,7 +178,7 @@ responseMapWindows = []  # map from pid to response
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 last_arrival_time = 0  # Untuk fitur Inter-Arrival Time
-sa_rf_cdd_model = SARF_Wrapper()
+sa_rf_cdd_model = SA_RF_CDD_Wrapper()
 
 # The function to update the core nums by request.
 def updateThread():
