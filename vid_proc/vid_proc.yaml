@@ -14,8 +14,6 @@ spec:
             - containerPort: 8081
               protocol: TCP
           env:
-            - name: PORT
-              value: "8081"
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:
