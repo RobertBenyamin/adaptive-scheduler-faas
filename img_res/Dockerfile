@@ -14,5 +14,6 @@ COPY dnld_blob.py ./
 COPY storage_helper.py ./
 
 EXPOSE 8081
+ENV PORT=8081
 
 CMD ["python", "runner.py"]
