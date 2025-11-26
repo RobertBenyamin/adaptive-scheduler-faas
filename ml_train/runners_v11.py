@@ -270,6 +270,8 @@ ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
 BETA_RT = 0.3   # Faktor penalti standar deviasi
 
 # Fungsi Menghitung Remaining Time
+
+
 def calculate_remaining_time(pid):
     """
     Menghitung sisa waktu eksekusi berdasarkan beberapa metode prediksi burst time.
@@ -600,7 +602,7 @@ def run():
 
     # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
-    myPort = int(os.environ.get('PORT', 9999))
+    myPort = int(os.environ.get('PORT', 8081))
 
     # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

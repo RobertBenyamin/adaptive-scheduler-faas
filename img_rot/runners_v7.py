@@ -12,6 +12,7 @@ from sklearn.cluster import KMeans
 from storage_helper import download_file, upload_file
 import heapq
 
+
 class PrintHook:
     def __init__(self, out=1):
         self.func = None
@@ -88,7 +89,8 @@ lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
 FUNCTION_HISTORY_KEY = "function_history"
-processExecutionHistory = {FUNCTION_HISTORY_KEY: []} # Menyimpan histori eksekusi proses
+# Menyimpan histori eksekusi proses
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}
 processStartTime = {}
 
 lockPIDMap = threading.Lock()
@@ -110,6 +112,8 @@ def MyHookOut(text):
     return 1, 1, ' -- pid -- ' + str(os.getpid()) + ' ' + text
 
 # The function to update the core nums by request.
+
+
 def updateThread():
     # Shared vaiable: numCores
     global numCores
@@ -226,6 +230,8 @@ def myFunction(data_, clientSocket_):
     return burstTime
 
 # Fungsi EWMA (Exponential Weighted Moving Average)
+
+
 def calculate_ewma(history, alpha=0.8):
     if not history:
         return 0  # Jika tidak ada data, kembalikan 0
@@ -238,9 +244,11 @@ def calculate_ewma(history, alpha=0.8):
 # Parameter Mitigasi Ketidakpastian
 ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
 BETA_RT = 0.3   # Faktor penalti standar deviasi
-GAMMA = 1.0 # Safety margin factor for intra-cluster standard deviation
+GAMMA = 1.0  # Safety margin factor for intra-cluster standard deviation
 
 # Fungsi Menghitung Remaining Time
+
+
 def calculate_remaining_time(pid):
     """
     Uses K-Means to identify clusters but makes a risk-adjusted prediction
@@ -263,17 +271,19 @@ def calculate_remaining_time(pid):
         return max(tsu - elapsed_time, 0)
 
     history_np = np.array(history).reshape(-1, 1)
-    
+
     try:
         # 1. Perform clustering
-        kmeans = KMeans(n_clusters=3, random_state=42, n_init='auto').fit(history_np)
-        
+        kmeans = KMeans(n_clusters=3, random_state=42,
+                        n_init='auto').fit(history_np)
+
         # Find which cluster is the 'shortest' one
         shortest_cluster_index = np.argmin(kmeans.cluster_centers_)
         shortest_centroid = kmeans.cluster_centers_[shortest_cluster_index][0]
 
         # 2. Isolate the data points belonging to the shortest cluster
-        short_cluster_points = history_np[kmeans.labels_ == shortest_cluster_index]
+        short_cluster_points = history_np[kmeans.labels_ ==
+                                          shortest_cluster_index]
 
         # 3. Calculate the standard deviation *within* that cluster
         if len(short_cluster_points) > 1:
@@ -283,7 +293,8 @@ def calculate_remaining_time(pid):
 
         # 4. Create the risk-adjusted burst time prediction
         # This is the key fix: add a safety margin based on the cluster's own volatility
-        predicted_burst_time = shortest_centroid + (GAMMA * std_dev_short_cluster)
+        predicted_burst_time = shortest_centroid + \
+            (GAMMA * std_dev_short_cluster)
 
     except Exception:
         # If clustering fails, fallback to the robust v8 logic
@@ -334,6 +345,7 @@ def calculate_dynamic_beta(total_wait_time, num_tasks):
 
 # Batas waktu maksimum sebelum preemption terjadi (dalam detik)
 PREEMPTION_THRESHOLD = 4
+
 
 def waitTermination(childPid):
     """
@@ -565,6 +577,7 @@ def IOThread():
         (clientSocket, _) = serverSocket.accept()
         threading.Thread(target=performIO, args=(clientSocket,)).start()
 
+
 def run():
     # serverSocket_: socket
     # actionModule:  the module to execute
@@ -588,7 +601,7 @@ def run():
 
     # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
-    myPort = int(os.environ.get('PORT', 9999))
+    myPort = int(os.environ.get('PORT', 8081))
 
     # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

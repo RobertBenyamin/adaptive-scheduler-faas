@@ -24,6 +24,7 @@ processStartTime = {}
 xgb_model = None
 xgb_model_lock = Lock()
 
+
 def build_features_from_history(history):
     """
     Create feature vectors from execution time history.
@@ -31,15 +32,15 @@ def build_features_from_history(history):
     """
     if len(history) < 5:
         return None
-    
+
     features_list = []
-    
+
     # Use sliding window: last 5 execution times
     window_size = 5
     for i in range(window_size, len(history)):
         window = history[i-window_size:i]
         target = history[i]
-        
+
         # Feature engineering
         features = np.array([
             np.mean(window),              # Mean execution time
@@ -50,9 +51,9 @@ def build_features_from_history(history):
             np.percentile(window, 75),    # 75th percentile
             (window[-1] - window[0]) / (len(window) - 1),  # Trend (slope)
         ])
-        
+
         features_list.append(features)
-    
+
     return np.array(features_list), np.array(history[window_size:])
 
 
@@ -63,13 +64,13 @@ def train_xgb_model(history):
     """
     if len(history) < 10:  # Need at least 10 samples
         return None
-    
+
     try:
         X, y = build_features_from_history(history)
-        
+
         if X is None or len(X) < 2:
             return None
-        
+
         # Create XGBoost model with conservative parameters
         # (to avoid overfitting on small datasets)
         model = xgb.XGBRegressor(
@@ -82,12 +83,12 @@ def train_xgb_model(history):
             objective='reg:squarederror',
             verbosity=0
         )
-        
+
         # Train on all available data
         model.fit(X, y, verbose=False)
-        
+
         return model
-    
+
     except Exception as e:
         print(f"Error training XGBoost: {e}")
         return None
@@ -99,10 +100,10 @@ def predict_xgb(model, history):
     """
     if model is None or len(history) < 5:
         return None
-    
+
     try:
         window = history[-5:]
-        
+
         # Create features from the last 5 execution times
         features = np.array([
             np.mean(window),
@@ -113,15 +114,16 @@ def predict_xgb(model, history):
             np.percentile(window, 75),
             (window[-1] - window[0]) / (len(window) - 1),
         ]).reshape(1, -1)
-        
+
         # Predict
         prediction = model.predict(features)[0]
-        
+
         return max(float(prediction), 0)  # Ensure non-negative
-    
+
     except Exception as e:
         print(f"Error predicting with XGBoost: {e}")
         return None
+
 
 def signal_handler(sig, frame):
     serverSocket_.close()
@@ -203,7 +205,8 @@ lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
 FUNCTION_HISTORY_KEY = "function_history"
-processExecutionHistory = {FUNCTION_HISTORY_KEY: []}  # Menyimpan histori eksekusi proses
+# Menyimpan histori eksekusi proses
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}
 processStartTime = {}
 
 lockPIDMap = threading.Lock()
@@ -216,6 +219,8 @@ responseMapWindows = []  # map from pid to response
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 # The function to update the core nums by request.
+
+
 def updateThread():
     # Shared vaiable: numCores
     global numCores
@@ -347,6 +352,8 @@ ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
 BETA_RT = 0.3   # Faktor penalti standar deviasi
 
 # Fungsi Menghitung Remaining Time
+
+
 def calculate_remaining_time(pid):
     """
     XGBoost-based prediction for execution time.
@@ -365,25 +372,26 @@ def calculate_remaining_time(pid):
         with xgb_model_lock:
             if xgb_model is None or len(history) % 15 == 0:
                 xgb_model = train_xgb_model(history)
-        
+
         if xgb_model is not None:
             xgb_pred = predict_xgb(xgb_model, history)
             if xgb_pred is not None and xgb_pred > 0:
                 elapsed_time = time.time() - processStartTime.get(pid, time.time())
                 return max(xgb_pred - elapsed_time, 0)
-    
+
     # --- Fallback to v8 logic (EWMA + Uncertainty Mitigation) ---
     avg_burst_time = np.mean(history)
     ewma_burst_time = calculate_ewma(history)
     std_dev = np.std(history) if len(history) > 1 else 0
-    
+
     tsi = (avg_burst_time + ewma_burst_time) / 2
     tsu = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)
-    
+
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
     remaining_time = max(tsu - elapsed_time, 0)
-    
+
     return remaining_time
+
 
 def calculate_total_wait_time(processQueue):
     """
@@ -674,7 +682,7 @@ def run():
 
     # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
-    myPort = int(os.environ.get('PORT', 9999))
+    myPort = int(os.environ.get('PORT', 8081))
 
     # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

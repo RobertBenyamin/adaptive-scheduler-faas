@@ -12,6 +12,7 @@ from sklearn.cluster import KMeans
 from storage_helper import download_file, upload_file
 import heapq
 
+
 class PrintHook:
     def __init__(self, out=1):
         self.func = None
@@ -88,7 +89,8 @@ lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
 FUNCTION_HISTORY_KEY = "function_history"
-processExecutionHistory = {FUNCTION_HISTORY_KEY: []} # Menyimpan histori eksekusi proses
+# Menyimpan histori eksekusi proses
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}
 processStartTime = {}
 
 lockPIDMap = threading.Lock()
@@ -110,6 +112,8 @@ def MyHookOut(text):
     return 1, 1, ' -- pid -- ' + str(os.getpid()) + ' ' + text
 
 # The function to update the core nums by request.
+
+
 def updateThread():
     # Shared vaiable: numCores
     global numCores
@@ -226,6 +230,8 @@ def myFunction(data_, clientSocket_):
     return burstTime
 
 # Fungsi EWMA (Exponential Weighted Moving Average)
+
+
 def calculate_ewma(history, alpha=0.8):
     if not history:
         return 0  # Jika tidak ada data, kembalikan 0
@@ -246,40 +252,43 @@ def calculate_ema(data, period):
     Calculates the Exponential Moving Average (EMA) for a given data series.
     """
     if len(data) < period:
-        return np.mean(data) # Fallback to simple average if not enough data
-    
+        return np.mean(data)  # Fallback to simple average if not enough data
+
     # Formula: EMA = (Current Value * Multiplier) + (Previous EMA * (1 - Multiplier))
     multiplier = 2 / (period + 1)
-    ema = np.mean(data[:period]) # Start with SMA for the first value
+    ema = np.mean(data[:period])  # Start with SMA for the first value
     for i in range(period, len(data)):
         ema = (data[i] * multiplier) + (ema * (1 - multiplier))
     return ema
+
 
 def get_adaptive_macd_params(history_len):
     """
     Returns adaptive (fast, slow) EMA periods based on history length.
     This is crucial for making MACD work with our short test durations.
     """
-    if history_len >= 20: # HIGH_LOAD scenario
-        return (5, 10) # More stable parameters
-    elif history_len >= 8: # MED_LOAD scenario
+    if history_len >= 20:  # HIGH_LOAD scenario
+        return (5, 10)  # More stable parameters
+    elif history_len >= 8:  # MED_LOAD scenario
         return (2, 5)  # Very sensitive parameters
-    else: # LOW_LOAD or initial phase
-        return (0, 0) # Signal that MACD is not applicable
+    else:  # LOW_LOAD or initial phase
+        return (0, 0)  # Signal that MACD is not applicable
 
 # Fungsi Menghitung Remaining Time
+
+
 def calculate_remaining_time(pid):
     """
     Calculates remaining time using a baseline v8 prediction, adjusted
     by a momentum signal from an adaptive MACD indicator.
     """
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
-    
+
     # --- 1. Calculate Baseline Prediction (from runners_v8) ---
     if not history:
         initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
         return initial_burst
-    
+
     avg_burst_time = np.mean(history)
     ewma_burst_time = calculate_ewma(history)
     tsi = (avg_burst_time + ewma_burst_time) / 2
@@ -290,18 +299,18 @@ def calculate_remaining_time(pid):
     fast_period, slow_period = get_adaptive_macd_params(len(history))
 
     # --- 3. Apply MACD Adjustment if applicable ---
-    if fast_period > 0: # Check if MACD is applicable
+    if fast_period > 0:  # Check if MACD is applicable
         try:
             ema_fast = calculate_ema(history, fast_period)
             ema_slow = calculate_ema(history, slow_period)
             macd_line = ema_fast - ema_slow
-            
+
             # Determine adjustment based on trend direction
-            if macd_line > 0: # Uptrend: execution times are increasing
+            if macd_line > 0:  # Uptrend: execution times are increasing
                 adjustment = MACD_ADJUSTMENT_FACTOR
-            else: # Downtrend: execution times are decreasing
+            else:  # Downtrend: execution times are decreasing
                 adjustment = -MACD_ADJUSTMENT_FACTOR
-            
+
             # Apply the adjustment to the baseline
             predicted_burst_time = baseline_prediction * (1 + adjustment)
         except Exception:
@@ -314,7 +323,7 @@ def calculate_remaining_time(pid):
     # --- 4. Calculate Final Remaining Time ---
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
     remaining_time = max(predicted_burst_time - elapsed_time, 0)
-    
+
     return remaining_time
 
 
@@ -351,6 +360,7 @@ def calculate_dynamic_beta(total_wait_time, num_tasks):
 
 # Batas waktu maksimum sebelum preemption terjadi (dalam detik)
 PREEMPTION_THRESHOLD = 4
+
 
 def waitTermination(childPid):
     """
@@ -582,6 +592,7 @@ def IOThread():
         (clientSocket, _) = serverSocket.accept()
         threading.Thread(target=performIO, args=(clientSocket,)).start()
 
+
 def run():
     # serverSocket_: socket
     # actionModule:  the module to execute
@@ -605,7 +616,7 @@ def run():
 
     # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
-    myPort = int(os.environ.get('PORT', 9999))
+    myPort = int(os.environ.get('PORT', 8081))
 
     # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

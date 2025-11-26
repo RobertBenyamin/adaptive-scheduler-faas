@@ -25,6 +25,8 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 # 19v1
+
+
 class SA_RF_CDD_Wrapper:
     def __init__(self):
         # Menggunakan AdaptiveRandomForestRegressor dari River
@@ -33,10 +35,11 @@ class SA_RF_CDD_Wrapper:
         self.model = ensemble.AdaptiveRandomForestRegressor(
             n_models=10,      # Jumlah pohon (N)
             seed=42,
-            grace_period=50,  # Ekuivalen dengan nmin sebelum split (Hoeffding Bound)
-            drift_detector=drift.ADWIN(delta=0.002) # Detektor Concept Drift
+            # Ekuivalen dengan nmin sebelum split (Hoeffding Bound)
+            grace_period=50,
+            drift_detector=drift.ADWIN(delta=0.002)  # Detektor Concept Drift
         )
-        
+
     def extract_features(self, history, current_arrival_time, last_arrival):
         """
         Mengubah raw history menjadi fitur sesuai Tabel 4.3 
@@ -79,13 +82,15 @@ class SA_RF_CDD_Wrapper:
         }
 
     def predict(self, history, current_arrival_time, last_arrival):
-        features = self.extract_features(history, current_arrival_time, last_arrival)
+        features = self.extract_features(
+            history, current_arrival_time, last_arrival)
         # Prediksi Stream (sangat cepat, O(depth)) [cite: 178]
         return self.model.predict_one(features)
 
     def learn(self, history, current_arrival_time, last_arrival, actual_duration):
         # Reconstruct features saat event terjadi untuk training
-        features = self.extract_features(history, current_arrival_time, last_arrival)
+        features = self.extract_features(
+            history, current_arrival_time, last_arrival)
         # Update model secara inkremental (O(1)) [cite: 202]
         self.model.learn_one(features, actual_duration)
 
@@ -165,7 +170,8 @@ lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
 FUNCTION_HISTORY_KEY = "function_history"
-processExecutionHistory = {FUNCTION_HISTORY_KEY: []}  # Menyimpan histori eksekusi proses
+# Menyimpan histori eksekusi proses
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}
 processStartTime = {}
 
 lockPIDMap = threading.Lock()
@@ -181,6 +187,8 @@ last_arrival_time = 0  # Untuk fitur Inter-Arrival Time
 sa_rf_cdd_model = SA_RF_CDD_Wrapper()
 
 # The function to update the core nums by request.
+
+
 def updateThread():
     # Shared vaiable: numCores
     global numCores
@@ -297,6 +305,8 @@ def myFunction(data_, clientSocket_):
     return burstTime
 
 # Fungsi EWMA (Exponential Weighted Moving Average)
+
+
 def calculate_ewma(history, alpha=0.8):
     if not history:
         return 0  # Jika tidak ada data, kembalikan 0
@@ -311,17 +321,19 @@ ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
 BETA_RT = 0.3   # Faktor penalti standar deviasi
 
 # Fungsi Menghitung Remaining Time
+
+
 def calculate_remaining_time(pid):
     """
     Menghitung sisa waktu menggunakan SA-RF-CDD (Stream-Based).
     Menggantikan metode batch training lama.
     """
     global last_arrival_time
-    
+
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
-    
+
     # --- LOGIKA LAMA DIHAPUS ---
-    # rf_pred = train_models(history) 
+    # rf_pred = train_models(history)
     # ---------------------------
 
     # --- LOGIKA BARU (SA-RF-CDD) ---
@@ -332,8 +344,8 @@ def calculate_remaining_time(pid):
     # Prediksi burst time total menggunakan model stream
     # Kita menggunakan arrival time saat ini sebagai estimasi konteks
     predicted_burst = sa_rf_cdd_model.predict(
-        history, 
-        time.time(), 
+        history,
+        time.time(),
         last_arrival_time
     )
     # -------------------------------
@@ -384,35 +396,37 @@ PREEMPTION_THRESHOLD = 4
 
 def waitTermination(childPid):
     global processQueue, mapPIDtoStatus, last_arrival_time
-    
+
     # Tunggu hingga proses selesai
-    _, status = os.waitpid(childPid, 0) 
+    _, status = os.waitpid(childPid, 0)
 
     lockPIDMap.acquire()
 
     try:
         mapPIDtoStatus.pop(childPid, None)
-        
+
         if childPid in processStartTime:
             actual_duration = time.time() - processStartTime[childPid]
-            
+
             # --- SA-RF-CDD LEARNING STEP ---
             # Kita melakukan update model (partial_fit/learn_one) di sini.
             # Mengambil history SEBELUM nilai baru ditambahkan untuk fitur training
             history_context = processExecutionHistory[FUNCTION_HISTORY_KEY]
-            
+
             # Latih model dengan data yang baru saja terjadi
             # Ini memenuhi syarat update asinkron O(1) [cite: 202]
             sa_rf_cdd_model.learn(
-                history_context, 
-                processStartTime[childPid], # Gunakan waktu mulai asli sebagai arrival konteks
+                history_context,
+                # Gunakan waktu mulai asli sebagai arrival konteks
+                processStartTime[childPid],
                 last_arrival_time
             )
             # -------------------------------
 
             # Setelah belajar, baru tambahkan ke histori
-            processExecutionHistory[FUNCTION_HISTORY_KEY].append(actual_duration)
-            
+            processExecutionHistory[FUNCTION_HISTORY_KEY].append(
+                actual_duration)
+
             # Limit history size agar memori tidak bocor (optional, river handled this internally but good for features)
             if len(processExecutionHistory[FUNCTION_HISTORY_KEY]) > 1000:
                 processExecutionHistory[FUNCTION_HISTORY_KEY].pop(0)
@@ -652,7 +666,7 @@ def run():
 
     # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
-    myPort = int(os.environ.get('PORT', 9999))
+    myPort = int(os.environ.get('PORT', 8081))
 
     # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

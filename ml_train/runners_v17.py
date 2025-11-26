@@ -100,7 +100,8 @@ lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
 FUNCTION_HISTORY_KEY = "function_history"
-processExecutionHistory = {FUNCTION_HISTORY_KEY: []}  # Menyimpan histori eksekusi proses
+# Menyimpan histori eksekusi proses
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}
 processStartTime = {}
 
 lockPIDMap = threading.Lock()
@@ -116,6 +117,8 @@ rf_model_cache = None
 rf_model_lock = threading.Lock()
 
 # The function to update the core nums by request.
+
+
 def updateThread():
     # Shared vaiable: numCores
     global numCores
@@ -232,6 +235,8 @@ def myFunction(data_, clientSocket_):
     return burstTime
 
 # Fungsi EWMA (Exponential Weighted Moving Average)
+
+
 def calculate_ewma(history, alpha=0.8):
     if not history:
         return 0  # Jika tidak ada data, kembalikan 0
@@ -240,21 +245,22 @@ def calculate_ewma(history, alpha=0.8):
         ewma = alpha * val + (1 - alpha) * ewma
     return ewma
 
+
 def build_temporal_features_with_trend(history, window_size=5):
     """
     Complete feature engineering for improved Random Forest.
     """
     if len(history) < window_size + 1:
         return None, None
-    
+
     X, y = [], []
-    
+
     for i in range(window_size, len(history)):
         window = history[i-window_size:i]
-        
+
         # Temporal features (last 5 execution times)
         temporal_features = list(window)
-        
+
         # Statistical features
         statistical_features = [
             np.mean(window),
@@ -262,24 +268,25 @@ def build_temporal_features_with_trend(history, window_size=5):
             np.max(window),
             np.min(window),
         ]
-        
+
         # Trend features
-        trend = (window[-1] - window[0]) / len(window) if len(window) > 1 else 0
+        trend = (window[-1] - window[0]) / \
+            len(window) if len(window) > 1 else 0
         momentum = window[-1] - np.mean(window)
-        
+
         if len(window) > 1:
             increases = np.sum(np.diff(window) > 0)
             pct_increases = increases / (len(window) - 1)
         else:
             pct_increases = 0
-        
+
         trend_features = [trend, momentum, pct_increases]
-        
+
         # Combine: 5 + 4 + 3 = 12 features
         features = temporal_features + statistical_features + trend_features
         X.append(features)
         y.append(history[i])
-    
+
     return np.array(X), np.array(y)
 
 
@@ -289,12 +296,12 @@ def train_rf_improved(history):
     """
     if len(history) < 10:
         return None
-    
+
     X, y = build_temporal_features_with_trend(history, window_size=5)
-    
+
     if X is None or len(X) < 5:
         return None
-    
+
     # Train with optimized parameters
     model = RandomForestRegressor(
         n_estimators=30,
@@ -304,7 +311,7 @@ def train_rf_improved(history):
         random_state=42,
         n_jobs=-1
     )
-    
+
     model.fit(X, y)
     return model
 
@@ -315,9 +322,9 @@ def predict_rf_improved(model, history):
     """
     if model is None or len(history) < 5:
         return None
-    
+
     last_window = history[-5:]
-    
+
     # Build features (same as training)
     temporal_features = list(last_window)
     statistical_features = [
@@ -326,21 +333,21 @@ def predict_rf_improved(model, history):
         np.max(last_window),
         np.min(last_window),
     ]
-    
+
     trend = (last_window[-1] - last_window[0]) / len(last_window)
     momentum = last_window[-1] - np.mean(last_window)
-    
+
     if len(last_window) > 1:
         increases = np.sum(np.diff(last_window) > 0)
         pct_increases = increases / (len(last_window) - 1)
     else:
         pct_increases = 0
-    
+
     trend_features = [trend, momentum, pct_increases]
-    
+
     features = temporal_features + statistical_features + trend_features
     prediction = model.predict([features])[0]
-    
+
     return max(float(prediction), 0)
 
 
@@ -355,13 +362,13 @@ def calculate_remaining_time(pid):
         return initial_burst
 
     if len(history) >= 10:
-      rf_model = train_rf_improved(history)
-      if rf_model is not None:
-          rf_prediction = predict_rf_improved(rf_model, history)
-          if rf_prediction is not None:
-              elapsed_time = time.time() - processStartTime.get(pid, time.time())
-              return max(rf_prediction - elapsed_time, 0)
-    
+        rf_model = train_rf_improved(history)
+        if rf_model is not None:
+            rf_prediction = predict_rf_improved(rf_model, history)
+            if rf_prediction is not None:
+                elapsed_time = time.time() - processStartTime.get(pid, time.time())
+                return max(rf_prediction - elapsed_time, 0)
+
     # Fallback to Average if RF not ready
     avg_burst_time = np.mean(history)
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
@@ -658,7 +665,7 @@ def run():
 
     # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
-    myPort = int(os.environ.get('PORT', 9999))
+    myPort = int(os.environ.get('PORT', 8081))
 
     # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

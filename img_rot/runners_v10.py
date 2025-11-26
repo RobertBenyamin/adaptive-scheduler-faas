@@ -100,7 +100,8 @@ lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
 FUNCTION_HISTORY_KEY = "function_history"
-processExecutionHistory = {FUNCTION_HISTORY_KEY: []}  # Menyimpan histori eksekusi proses
+# Menyimpan histori eksekusi proses
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}
 processStartTime = {}
 
 
@@ -276,33 +277,34 @@ def calculate_remaining_time(pid):
     Hybrid approach: kombinasi beberapa metode
     """
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
-    
+
     # --- 1. Calculate Baseline Prediction (from runners_v8) ---
     if not history:
         initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
         return initial_burst
-    
+
     # Method 1: Median (robust)
     median_pred = np.median(history)
-    
+
     # Method 2: P75 (konservatif)
     p75_pred = np.percentile(history, 75)
-    
+
     # Method 3: Recent window average
-    recent_pred = np.mean(history[-5:]) if len(history) >= 5 else np.mean(history)
-    
+    recent_pred = np.mean(
+        history[-5:]) if len(history) >= 5 else np.mean(history)
+
     # Hitung coefficient of variation (CV) untuk menentukan bobot
     cv = np.std(history) / (np.mean(history) + 1e-9)
-    
+
     # Jika CV tinggi (variabilitas tinggi), gunakan metode lebih konservatif
     if cv > 0.5:  # Variabilitas tinggi
         predicted_burst = 0.3 * median_pred + 0.5 * p75_pred + 0.2 * recent_pred
     else:  # Variabilitas rendah
         predicted_burst = 0.2 * median_pred + 0.3 * p75_pred + 0.5 * recent_pred
-    
+
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
     remaining_time = max(predicted_burst - elapsed_time, 0)
-    
+
     return remaining_time
 
 
@@ -582,6 +584,7 @@ def IOThread():
 agingFactor = 0.1  # Decrease burst time by 0.1 second for every second of waiting
 MAX_WAIT_TIME = 30  # seconds, after which process will be promoted to running
 
+
 def run():
 
     # serverSocket_: socket
@@ -606,7 +609,7 @@ def run():
 
     # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
-    myPort = int(os.environ.get('PORT', 9999))
+    myPort = int(os.environ.get('PORT', 8081))
 
     # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

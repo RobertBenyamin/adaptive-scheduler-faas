@@ -101,7 +101,8 @@ lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
 FUNCTION_HISTORY_KEY = "function_history"
-processExecutionHistory = {FUNCTION_HISTORY_KEY: []}  # Menyimpan histori eksekusi proses
+# Menyimpan histori eksekusi proses
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}
 processStartTime = {}
 
 lockPIDMap = threading.Lock()
@@ -132,6 +133,8 @@ rf_model_cache = None
 rf_model_lock = threading.Lock()
 
 # The function to update the core nums by request.
+
+
 def updateThread():
     # Shared vaiable: numCores
     global numCores
@@ -248,6 +251,8 @@ def myFunction(data_, clientSocket_):
     return burstTime
 
 # Fungsi EWMA (Exponential Weighted Moving Average)
+
+
 def calculate_ewma(history, alpha=0.8):
     """EWMA predictor"""
     if not history:
@@ -257,6 +262,7 @@ def calculate_ewma(history, alpha=0.8):
         ewma = alpha * val + (1 - alpha) * ewma
     return ewma
 
+
 def calculate_trend_predictor(history):
     """
     Trend-based predictor using linear extrapolation.
@@ -264,35 +270,36 @@ def calculate_trend_predictor(history):
     """
     if len(history) < 3:
         return np.mean(history)
-    
+
     # Use last 10 samples for trend
     recent = history[-10:] if len(history) >= 10 else history
-    
+
     # Weighted linear regression (more weight on recent samples)
     weights = np.exp(np.linspace(-1, 0, len(recent)))
     weights /= weights.sum()
-    
+
     X = np.arange(len(recent))
     y = np.array(recent)
-    
+
     # Weighted mean
     mean_x = np.sum(weights * X)
     mean_y = np.sum(weights * y)
-    
+
     # Weighted slope
     numerator = np.sum(weights * (X - mean_x) * (y - mean_y))
     denominator = np.sum(weights * (X - mean_x) ** 2)
-    
+
     if denominator == 0:
         return recent[-1]
-    
+
     slope = numerator / denominator
     intercept = mean_y - slope * mean_x
-    
+
     # Predict next value
     prediction = slope * len(recent) + intercept
-    
+
     return max(prediction, 0)
+
 
 def train_rf_lightweight(history):
     """
@@ -300,10 +307,10 @@ def train_rf_lightweight(history):
     """
     if len(history) < 10:
         return None
-    
+
     window_size = 5
     X, y = [], []
-    
+
     for i in range(window_size, len(history)):
         window = history[i-window_size:i]
         features = [
@@ -316,13 +323,13 @@ def train_rf_lightweight(history):
         ]
         X.append(features)
         y.append(history[i])
-    
+
     if len(X) < 5:
         return None
-    
+
     X = np.array(X)
     y = np.array(y)
-    
+
     model = RandomForestRegressor(
         n_estimators=30,
         max_depth=4,
@@ -330,15 +337,16 @@ def train_rf_lightweight(history):
         random_state=42,
         n_jobs=-1
     )
-    
+
     model.fit(X, y)
     return model
+
 
 def predict_rf(model, history):
     """Make RF prediction"""
     if model is None or len(history) < 5:
         return None
-    
+
     window = history[-5:]
     features = np.array([[
         np.mean(window),
@@ -348,8 +356,9 @@ def predict_rf(model, history):
         window[-1],
         (window[-1] - window[0]) / 5,
     ]])
-    
+
     return max(float(model.predict(features)[0]), 0)
+
 
 def calculate_prediction_confidence(history, predictions):
     """
@@ -357,20 +366,21 @@ def calculate_prediction_confidence(history, predictions):
     """
     if len(predictions) < 2:
         return 0.5  # Default confidence
-    
+
     # Variance in predictions (low variance = high confidence)
     pred_std = np.std(list(predictions.values()))
     pred_mean = np.mean(list(predictions.values()))
-    
+
     if pred_mean == 0:
         return 0.5
-    
+
     coefficient_of_variation = pred_std / pred_mean
-    
+
     # Inverse relationship: lower CV = higher confidence
     confidence = 1.0 / (1.0 + coefficient_of_variation)
-    
+
     return min(max(confidence, 0.1), 0.9)
+
 
 def update_adaptive_weights(actual_time):
     """
@@ -378,7 +388,7 @@ def update_adaptive_weights(actual_time):
     Methods that perform better get higher weights.
     """
     global adaptive_weights
-    
+
     # Calculate recent accuracy (inverse of error)
     accuracies = {}
     for method in prediction_errors:
@@ -388,20 +398,21 @@ def update_adaptive_weights(actual_time):
             accuracies[method] = 1.0 / (1.0 + mape)
         else:
             accuracies[method] = 0.33
-    
+
     # Normalize to sum to 1.0
     total = sum(accuracies.values())
     if total > 0:
         adaptive_weights = {k: v/total for k, v in accuracies.items()}
-    
+
     # Add momentum (smooth weight changes)
     momentum = 0.7
     for method in adaptive_weights:
         if method in accuracies:
             adaptive_weights[method] = (
-                momentum * adaptive_weights[method] + 
+                momentum * adaptive_weights[method] +
                 (1 - momentum) * (accuracies[method] / total)
             )
+
 
 def detect_system_load():
     """
@@ -409,9 +420,9 @@ def detect_system_load():
     Based on queue length and recent execution times.
     """
     global processQueue
-    
+
     queue_length = len(processQueue)
-    
+
     if queue_length == 0:
         return "LOW"
     elif queue_length < 5:
@@ -421,10 +432,11 @@ def detect_system_load():
 
 # ===== MAIN PREDICTION FUNCTION (AWHP) =====
 
+
 def calculate_remaining_time_awhp(pid):
     """
     Adaptive Weighted Hybrid Predictor (AWHP) - YOUR NOVEL ALGORITHM.
-    
+
     Key innovations:
     1. Adaptive weighting based on recent prediction accuracy
     2. Confidence-aware prediction
@@ -433,28 +445,28 @@ def calculate_remaining_time_awhp(pid):
     """
     global rf_model_cache, adaptive_weights
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
-    
+
     if not history:
         initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
         return initial_burst
-    
+
     # === STEP 1: Get predictions from all methods ===
     predictions = {}
-    
+
     # EWMA prediction
     ewma_pred = calculate_ewma(history)
     predictions["ewma"] = ewma_pred
-    
+
     # Trend prediction
     trend_pred = calculate_trend_predictor(history)
     predictions["trend"] = trend_pred
-    
+
     # Random Forest prediction
     if len(history) >= 10:
         with rf_model_lock:
             if rf_model_cache is None or len(history) % 15 == 0:
                 rf_model_cache = train_rf_lightweight(history)
-        
+
         if rf_model_cache is not None:
             rf_pred = predict_rf(rf_model_cache, history)
             if rf_pred is not None:
@@ -465,68 +477,73 @@ def calculate_remaining_time_awhp(pid):
             predictions["rf"] = ewma_pred
     else:
         predictions["rf"] = ewma_pred
-    
+
     # === STEP 2: Calculate prediction confidence ===
     confidence = calculate_prediction_confidence(history, predictions)
-    
+
     # === STEP 3: Detect system load ===
     system_load = detect_system_load()
-    
+
     # === STEP 4: Adjust weights based on system load ===
     load_adjusted_weights = adaptive_weights.copy()
-    
+
     if system_load == "LOW":
         # Trust trend more in low load (stable)
         load_adjusted_weights["trend"] *= 1.2
     elif system_load == "HIGH":
         # Trust EWMA more in high load (responsive)
         load_adjusted_weights["ewma"] *= 1.3
-    
+
     # Renormalize
     total_weight = sum(load_adjusted_weights.values())
-    load_adjusted_weights = {k: v/total_weight for k, v in load_adjusted_weights.items()}
-    
+    load_adjusted_weights = {k: v/total_weight for k,
+                             v in load_adjusted_weights.items()}
+
     # === STEP 5: Compute weighted ensemble prediction ===
     ensemble_pred = sum(
         load_adjusted_weights[method] * predictions[method]
         for method in predictions
     )
-    
+
     # === STEP 6: Confidence-aware adjustment ===
     # If confidence is low, be more conservative (add safety margin)
     if confidence < 0.5:
         std_dev = np.std(history[-10:]) if len(history) >= 10 else 0
         ensemble_pred += 0.3 * std_dev  # Safety margin
-    
+
     # === STEP 7: Calculate remaining time ===
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
     remaining_time = max(ensemble_pred - elapsed_time, 0)
-    
+
     return remaining_time
+
 
 def update_prediction_error(pid, actual_time):
     """
     Track prediction errors for adaptive weight updates.
     """
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
-    
+
     if len(history) < 2:
         return
-    
+
     # Get previous predictions
     ewma_pred = calculate_ewma(history[:-1])
     trend_pred = calculate_trend_predictor(history[:-1])
-    
+
     # Calculate errors
-    prediction_errors["ewma"].append(abs(ewma_pred - actual_time) / (actual_time + 1e-9))
-    prediction_errors["trend"].append(abs(trend_pred - actual_time) / (actual_time + 1e-9))
-    
+    prediction_errors["ewma"].append(
+        abs(ewma_pred - actual_time) / (actual_time + 1e-9))
+    prediction_errors["trend"].append(
+        abs(trend_pred - actual_time) / (actual_time + 1e-9))
+
     # RF error (if model exists)
     if rf_model_cache is not None and len(history) >= 10:
         rf_pred = predict_rf(rf_model_cache, history[:-1])
         if rf_pred is not None:
-            prediction_errors["rf"].append(abs(rf_pred - actual_time) / (actual_time + 1e-9))
-    
+            prediction_errors["rf"].append(
+                abs(rf_pred - actual_time) / (actual_time + 1e-9))
+
     # Update weights based on errors
     update_adaptive_weights(actual_time)
 
@@ -584,7 +601,7 @@ def waitTermination(childPid):
         if childPid in processStartTime:
             elapsed = time.time() - processStartTime[childPid]
             processExecutionHistory[FUNCTION_HISTORY_KEY].append(elapsed)
-            
+
             # Update prediction errors for adaptive learning
             update_prediction_error(childPid, elapsed)
 
@@ -822,7 +839,7 @@ def run():
 
     # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
-    myPort = int(os.environ.get('PORT', 9999))
+    myPort = int(os.environ.get('PORT', 8081))
 
     # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

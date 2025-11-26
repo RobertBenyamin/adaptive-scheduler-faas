@@ -107,7 +107,8 @@ lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
 FUNCTION_HISTORY_KEY = "function_history"
-processExecutionHistory = {FUNCTION_HISTORY_KEY: []}  # Menyimpan histori eksekusi proses
+# Menyimpan histori eksekusi proses
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}
 processStartTime = {}
 
 lockPIDMap = threading.Lock()
@@ -131,7 +132,8 @@ def build_lstm_model(input_shape):
     input_shape: (sequence_length, 1)
     """
     model = Sequential([
-        LSTM(16, activation='relu', input_shape=input_shape, return_sequences=False),
+        LSTM(16, activation='relu', input_shape=input_shape,
+             return_sequences=False),
         Dropout(0.2),
         Dense(8, activation='relu'),
         Dense(1, activation='relu')  # Output must be positive
@@ -146,41 +148,42 @@ def train_lstm_model(history):
     This is called infrequently to avoid overhead.
     """
     global lstm_model
-    
+
     if len(history) < lstm_sequence_length + 1:
         return None  # Not enough data
-    
+
     try:
         # Normalize the data
         history_np = np.array(history, dtype=np.float32)
         history_min = history_np.min()
         history_max = history_np.max()
-        
+
         if history_max == history_min:
             return None  # All values are the same, can't train
-        
-        history_normalized = (history_np - history_min) / (history_max - history_min)
-        
+
+        history_normalized = (history_np - history_min) / \
+            (history_max - history_min)
+
         # Create sequences for LSTM
         X, y = [], []
         for i in range(len(history_normalized) - lstm_sequence_length):
             X.append(history_normalized[i:i + lstm_sequence_length])
             y.append(history_normalized[i + lstm_sequence_length])
-        
+
         if len(X) < 2:  # Need at least 2 sequences
             return None
-        
+
         X = np.array(X).reshape(-1, lstm_sequence_length, 1)
         y = np.array(y)
-        
+
         # Train the model (verbose=0 to avoid spam)
         model = build_lstm_model((lstm_sequence_length, 1))
         model.fit(X, y, epochs=10, batch_size=2, verbose=0)
-        
+
         # Store normalization parameters
         model.history_min = history_min
         model.history_max = history_max
-        
+
         return model
     except Exception as e:
         print(f"Error training LSTM: {e}")
@@ -193,22 +196,25 @@ def predict_lstm(model, history):
     """
     if model is None or len(history) < lstm_sequence_length:
         return None
-    
+
     try:
         history_np = np.array(history, dtype=np.float32)
-        
+
         # Normalize using the model's stored parameters
-        history_normalized = (history_np - model.history_min) / (model.history_max - model.history_min)
-        
+        history_normalized = (history_np - model.history_min) / \
+            (model.history_max - model.history_min)
+
         # Get the last sequence
-        last_sequence = history_normalized[-lstm_sequence_length:].reshape(1, lstm_sequence_length, 1)
-        
+        last_sequence = history_normalized[-lstm_sequence_length:].reshape(
+            1, lstm_sequence_length, 1)
+
         # Predict
         prediction_normalized = model.predict(last_sequence, verbose=0)[0][0]
-        
+
         # Denormalize
-        prediction = prediction_normalized * (model.history_max - model.history_min) + model.history_min
-        
+        prediction = prediction_normalized * \
+            (model.history_max - model.history_min) + model.history_min
+
         return max(float(prediction), 0)  # Ensure non-negative
     except Exception as e:
         print(f"Error predicting with LSTM: {e}")
@@ -371,25 +377,25 @@ def calculate_remaining_time(pid):
         with lstm_model_lock:
             if lstm_model is None or len(history) % 10 == 0:
                 lstm_model = train_lstm_model(history)
-        
+
         if lstm_model is not None:
             lstm_pred = predict_lstm(lstm_model, history)
             if lstm_pred is not None and lstm_pred > 0:
                 # Use LSTM prediction with a conservative adjustment
                 elapsed_time = time.time() - processStartTime.get(pid, time.time())
                 return max(lstm_pred - elapsed_time, 0)
-    
+
     # --- Fallback to v8 logic if LSTM fails ---
     avg_burst_time = np.mean(history)
     ewma_burst_time = calculate_ewma(history)
     std_dev = np.std(history) if len(history) > 1 else 0
-    
+
     tsi = (avg_burst_time + ewma_burst_time) / 2
     tsu = max(ALPHA_RT * tsi - BETA_RT * std_dev, 0)
-    
+
     elapsed_time = time.time() - processStartTime.get(pid, time.time())
     remaining_time = max(tsu - elapsed_time, 0)
-    
+
     return remaining_time
 
 
@@ -682,7 +688,7 @@ def run():
 
     # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
-    myPort = int(os.environ.get('PORT', 9999))
+    myPort = int(os.environ.get('PORT', 8081))
 
     # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

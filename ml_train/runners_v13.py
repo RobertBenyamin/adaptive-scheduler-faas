@@ -100,7 +100,8 @@ lockCache = threading.Lock()
 
 processTimestamps = {}  # {pid: (initial_burst, start_time)}
 FUNCTION_HISTORY_KEY = "function_history"
-processExecutionHistory = {FUNCTION_HISTORY_KEY: []}  # Menyimpan histori eksekusi proses
+# Menyimpan histori eksekusi proses
+processExecutionHistory = {FUNCTION_HISTORY_KEY: []}
 processStartTime = {}
 
 lockPIDMap = threading.Lock()
@@ -113,6 +114,8 @@ responseMapWindows = []  # map from pid to response
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 # The function to update the core nums by request.
+
+
 def updateThread():
     # Shared vaiable: numCores
     global numCores
@@ -229,6 +232,8 @@ def myFunction(data_, clientSocket_):
     return burstTime
 
 # Fungsi EWMA (Exponential Weighted Moving Average)
+
+
 def calculate_ewma(history, alpha=0.8):
     if not history:
         return 0  # Jika tidak ada data, kembalikan 0
@@ -238,6 +243,8 @@ def calculate_ewma(history, alpha=0.8):
     return ewma
 
 # Model Training (Random Forest)
+
+
 def train_models(history):
     if len(history) < 5:  # Butuh minimal 5 data untuk regresi
         return np.mean(history), np.mean(history)
@@ -259,6 +266,8 @@ ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
 BETA_RT = 0.3   # Faktor penalti standar deviasi
 
 # Fungsi Menghitung Remaining Time
+
+
 def calculate_remaining_time(pid):
     """
     Menghitung sisa waktu eksekusi menggunakan Random Forest prediction.
@@ -573,7 +582,7 @@ def run():
 
     # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
-    myPort = int(os.environ.get('PORT', 9999))
+    myPort = int(os.environ.get('PORT', 8081))
 
     # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
