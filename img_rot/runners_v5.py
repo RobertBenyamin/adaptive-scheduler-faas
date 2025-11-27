@@ -573,40 +573,167 @@ def IOThread():
 agingFactor = 0.1  # Decrease burst time by 0.1 second for every second of waiting
 MAX_WAIT_TIME = 30  # seconds, after which process will be promoted to running
 
-
-def run():
-
-    # serverSocket_: socket
-    # actionModule:  the module to execute
-    # requestQueue:
-    # mapPIDtoStatus: store status for each process (waiting / running)
-    global serverSocket_
-    global actionModule
+def handle_client_connection(clientSocket, address):
+    """Handle a single client connection in a separate thread"""
     global requestQueue
     global mapPIDtoStatus
     global numCores
     global responseMapWindows
     global affinity_mask
     global processQueue
-    global processStartTime
 
-    # Set the core of mxcontainer
+    try:
+        print("Accept a new connection from %s" % str(address), flush=True)
+        
+        data_ = b''
+        data_ += clientSocket.recv(1024)
+        dataStr = data_.decode('UTF-8')
+
+        # Check for Host header
+        if 'Host' not in dataStr:
+            msg = 'OK'
+            response_headers = {
+                'Content-Type': 'text/html; encoding=utf8',
+                'Content-Length': len(msg),
+                'Connection': 'close',
+            }
+            response_headers_raw = ''.join('%s: %s\r\n' % (k, v) for k, v in response_headers.items())
+            r = 'HTTP/1.1 200 OK\r\n'
+            try:
+                clientSocket.send(r.encode(encoding="utf-8"))
+                clientSocket.send(response_headers_raw.encode(encoding="utf-8"))
+                clientSocket.send('\r\n'.encode(encoding="utf-8"))
+                clientSocket.send(msg.encode(encoding="utf-8"))
+            except:
+                pass
+            finally:
+                clientSocket.close()
+            return
+
+        # Parse message
+        while True:
+            dataStrList = dataStr.splitlines()
+            message = None
+            try:
+                message = json.loads(dataStrList[-1])
+                break
+            except:
+                data_ += clientSocket.recv(1024)
+                dataStr = data_.decode('UTF-8')
+
+        responseFlag = False
+        
+        # Handle numCores, Q, Clear messages
+        if message != None:
+            if "numCores" in message:
+                numCores = int(message["numCores"])
+                result = {"Response": "Ok"}
+                responseMapWindows = []
+                if "affinity_mask" in message:
+                    affinity_mask = message["affinity_mask"]
+                    os.sched_setaffinity(0, affinity_mask)
+                msg = json.dumps(result)
+                responseFlag = True
+            elif "Q" in message:
+                i = []
+                for responseTime in responseMapWindows:
+                    if responseTime[1][1] != -1:
+                        i.append(responseTime[1][1] - responseTime[1][0])
+                result = {"p95": np.percentile(i, 95) if len(i) > 0 else 0}
+                result["affinity_mask"] = list(affinity_mask)
+                result["numCores"] = numCores
+                msg = json.dumps(result)
+                responseFlag = True
+            elif "Clear" in message:
+                responseMapWindows = []
+
+        if responseFlag:
+            response_headers = {
+                'Content-Type': 'text/html; encoding=utf8',
+                'Content-Length': len(msg),
+                'Connection': 'close',
+            }
+            response_headers_raw = ''.join('%s: %s\r\n' % (k, v) for k, v in response_headers.items())
+            r = 'HTTP/1.1 200 OK\r\n'
+            try:
+                clientSocket.send(r.encode(encoding="utf-8"))
+                clientSocket.send(response_headers_raw.encode(encoding="utf-8"))
+                clientSocket.send('\r\n'.encode(encoding="utf-8"))
+                clientSocket.send(msg.encode(encoding="utf-8"))
+            except:
+                pass
+            finally:
+                clientSocket.close()
+            return
+
+        # a status mark of whether the process can run based on the free resources
+        waitForRunning = False
+
+        # The processes are running
+        numIsRunning = 0
+
+        lockPIDMap.acquire()
+        for child in mapPIDtoStatus.copy():
+            if mapPIDtoStatus[child] == "running":
+                numIsRunning += 1
+        if numIsRunning >= numCores:
+            waitForRunning = True # The process need to wait for resources
+
+        # slide windows
+        if len(responseMapWindows) >= 100:
+            responseMapWindows.pop(0)
+
+        childProcess = os.fork()
+        if childProcess == 0:
+            # Child process: run the function and exit
+            burstTime = myFunction(data_, clientSocket)
+            os._exit(os.EX_OK)
+        else:
+            # Append submit time to the responseMapWindows
+            responseMapWindows.append([childProcess, [time.time(), -1]])
+            
+            if waitForRunning:
+                # If there is no free resources (cpu core) for the process to run, then we set the childprocess to sleep.
+                mapPIDtoStatus[childProcess] = "waiting"
+                os.kill(childProcess, signal.SIGSTOP)
+
+                # Push to priority queue (using burstTime for SRTF logic)
+                burstTime = myFunction(data_, clientSocket)
+                heapq.heappush(processQueue, (burstTime, childProcess))
+            else:
+                mapPIDtoStatus[childProcess] = "running"
+                requestQueue.append(childProcess)
+
+            lockPIDMap.release()
+            
+            # Monitor child termination in separate thread
+            threadWait = threading.Thread(target=waitTermination, args=(childProcess,))
+            threadWait.daemon = True
+            threadWait.start()
+
+    except Exception as e:
+        print(f"Error handling client {address}: {e}", flush=True)
+    finally:
+        try:
+            clientSocket.close()
+        except:
+            pass
+
+def run():
+    global actionModule
+    global numCores
+
     numCores = 8
     os.sched_setaffinity(0, affinity_mask)
-
     print("Welcome... ", numCores)
 
-    # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
     myPort = int(os.environ.get('PORT', 8081))
 
-    # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     serverSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     serverSocket.bind((myHost, myPort))
-    serverSocket.listen(1)
-
-    # serverSocket_ = serverSocket
+    serverSocket.listen(10)
 
     # Set actionModule
     import app
@@ -621,165 +748,27 @@ def run():
 
     # Monitor numCore update
     threadUpdate = threading.Thread(target=updateThread)
+    threadUpdate.daemon = True
     threadUpdate.start()
 
     # Monitor I/O Block
     threadIntercept = threading.Thread(target=IOThread)
+    threadIntercept.daemon = True
     threadIntercept.start()
 
-    # If a request come, then fork.
-    while (True):
-
-        (clientSocket, address) = serverSocket.accept()
-        print("Accept a new connection from %s" % str(address), flush=True)
-
-        data_ = b''
-
-        data_ += clientSocket.recv(1024)
-
-        dataStr = data_.decode('UTF-8')
-
-        if 'Host' not in dataStr:
-            msg = 'OK'
-            response_headers = {
-                'Content-Type': 'text/html; encoding=utf8',
-                'Content-Length': len(msg),
-                'Connection': 'close',
-            }
-            response_headers_raw = ''.join('%s: %s\r\n' % (
-                k, v) for k, v in response_headers.items())
-
-            response_proto = 'HTTP/1.1'
-            response_status = '200'
-            response_status_text = 'OK'  # this can be random
-
-            # sending all this stuff
-            r = '%s %s %s\r\n' % (
-                response_proto, response_status, response_status_text)
-            try:
-                clientSocket.send(r.encode(encoding="utf-8"))
-                clientSocket.send(
-                    response_headers_raw.encode(encoding="utf-8"))
-                # to separate headers from body
-                clientSocket.send('\r\n'.encode(encoding="utf-8"))
-                clientSocket.send(msg.encode(encoding="utf-8"))
-                clientSocket.close()
-                continue
-            except:
-                clientSocket.close()
-                continue
-
-        while True:
-            dataStrList = dataStr.splitlines()
-
-            message = None
-            try:
-                message = json.loads(dataStrList[-1])
-                break
-            except:
-                data_ += clientSocket.recv(1024)
-                dataStr = data_.decode('UTF-8')
-
-        responseFlag = False
-        if message != None:
-
-            if "numCores" in message:
-                numCores = int(message["numCores"])
-                result = {"Response": "Ok"}
-                responseMapWindows = []
-                if "affinity_mask" in message:
-                    affinity_mask = message["affinity_mask"]
-                    os.sched_setaffinity(0, affinity_mask)
-                msg = json.dumps(result)
-                responseFlag = True
-
-            if "Q" in message:
-                i = []
-                for responseTime in responseMapWindows:
-                    if responseTime[1][1] != -1:
-                        i.append(responseTime[1][1] - responseTime[1][0])
-                if len(i) == 0:
-                    result = {"p95": 0}
-                else:
-                    result = {"p95": np.percentile(i, 95)}
-                result["affinity_mask"] = list(affinity_mask)
-                result["numCores"] = numCores
-                msg = json.dumps(result)
-                responseFlag = True
-
-            if "Clear" in message:
-                responseMapWindows = []
-
-        if responseFlag == True:
-            response_headers = {
-                'Content-Type': 'text/html; encoding=utf8',
-                'Content-Length': len(msg),
-                'Connection': 'close',
-            }
-            response_headers_raw = ''.join('%s: %s\r\n' % (
-                k, v) for k, v in response_headers.items())
-
-            response_proto = 'HTTP/1.1'
-            response_status = '200'
-            response_status_text = 'OK'  # this can be random
-
-            # sending all this stuff
-            r = '%s %s %s\r\n' % (
-                response_proto, response_status, response_status_text)
-
-            clientSocket.send(r.encode(encoding="utf-8"))
-            clientSocket.send(response_headers_raw.encode(encoding="utf-8"))
-            # to separate headers from body
-            clientSocket.send('\r\n'.encode(encoding="utf-8"))
-            clientSocket.send(msg.encode(encoding="utf-8"))
-            clientSocket.close()
-            continue
-
-        # a status mark of whether the process can run based on the free resources
-        waitForRunning = False
-
-        # The processes are running
-        numIsRunning = 0
-
-        lockPIDMap.acquire()
-        for child in mapPIDtoStatus.copy():
-            if mapPIDtoStatus[child] == "running":
-                numIsRunning += 1
-        if numIsRunning >= numCores:
-            waitForRunning = True  # The process need to wait for resources
-
-        # slide windows
-        if len(responseMapWindows) >= 100:
-            responseMapWindows.pop(0)
-
-        childProcess = os.fork()
-        if childProcess != 0:
-            responseMapWindows.append([childProcess, [time.time(), -1]])
-
-        if childProcess == 0:
-            # This is the child process: run the function and exit
-            myFunction(data_, clientSocket)
-            os._exit(os.EX_OK)
-        else:
-            # Append submit time to the responseMapWindows
-            if waitForRunning:
-                # If there is no free resources (cpu core) for the process to run, then we set the childprocess to sleep.
-                mapPIDtoStatus[childProcess] = "waiting"
-                os.kill(childProcess, signal.SIGSTOP)
-
-                # Push to priority queue (using burstTime for SRTF logic)
-                burstTime = myFunction(data_, clientSocket)
-                heapq.heappush(processQueue, (burstTime, childProcess))
-            else:
-                # If there are free resources (cpu core) for the process to run, then we let the childprocess to run.
-                mapPIDtoStatus[childProcess] = "running"
-                requestQueue.append(childProcess)
-
-            lockPIDMap.release()
-            # The childprocess is running, when it is finished, let the queue find waiting childprocesses
-            threadWait = threading.Thread(
-                target=waitTermination, args=(childProcess,))
-            threadWait.start()
+    # Accept connections and handle each in a separate thread
+    while True:
+        try:
+            (clientSocket, address) = serverSocket.accept()
+            # Handle each connection in a separate thread
+            handler_thread = threading.Thread(
+                target=handle_client_connection,
+                args=(clientSocket, address)
+            )
+            handler_thread.daemon = True
+            handler_thread.start()
+        except Exception as e:
+            print(f"Error accepting connection: {e}", flush=True)
 
 
 if __name__ == "__main__":
