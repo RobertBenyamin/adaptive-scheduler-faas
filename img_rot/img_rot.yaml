@@ -37,5 +37,6 @@ spec:
               cpu: 500m
     metadata:
       annotations:
-        autoscaling.knative.dev/target: "1000"
+        autoscaling.knative.dev/target: "100"
+        autoscaling.knative.dev/max-scale: "10"
         autoscaling.knative.dev/scale-to-zero-pod-retention-period: "1h"
