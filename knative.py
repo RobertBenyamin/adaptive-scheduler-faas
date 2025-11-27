@@ -46,11 +46,11 @@ for serviceName in serviceNames:
 
 # These files must be uploaded to your S3 bucket.
 TEST_DATA_CONFIG = {
-    "cnn-serving": [f"img{i}.jpg" for i in range(1, 51)],
-    "img-rot":     [f"img{i}.jpg" for i in range(1, 51)],
-    "img-res":     [f"img{i}.jpg" for i in range(1, 51)],
-    "vid-proc":    [f"vid{i}.mp4" for i in range(1, 21)],
-    "ml-train":    [f"dataset{i}.csv" for i in range(1, 16)],
+    "cnn-serving": [f"img{i}.jpg" for i in range(1, 41)],
+    "img-rot":     [f"img{i}.jpg" for i in range(1, 41)],
+    "img-res":     [f"img{i}.jpg" for i in range(1, 41)],
+    "vid-proc":    [f"vid{i}.mp4" for i in range(1, 11)],
+    "ml-train":    [f"dataset{i}.csv" for i in range(1, 11)],
     "web-serve":   [f"account{i}.txt" for i in range(1, 11)],
 }
 
