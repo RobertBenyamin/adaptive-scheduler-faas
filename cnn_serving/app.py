@@ -1,7 +1,9 @@
-from mxnet import gluon
 import os
+import time
+from mxnet import gluon
 import mxnet as mx
 from storage_helper import download_file
+from dnld_blob import download_blob_new
 
 TMP_DIR = "/tmp/"
 
@@ -15,9 +17,26 @@ def lambda_handler(event):
     blobName = event.get("input_file", "img10.jpg")
     
     pid = str(os.getpid())
-    local_file_path = os.path.join(TMP_DIR, f"{pid}_{blobName}")
 
-    download_file(blobName, local_file_path)
+    base = os.path.basename(blobName)
+    name, ext = os.path.splitext(base)
+    proc_blob_name = f"{name}_{pid}{ext}"
+    local_file_path = os.path.join(TMP_DIR, proc_blob_name)
+
+    # Request centralized IO server to fetch the object for this pid
+    try:
+        download_blob_new(blobName)  # send request; performIO will write proc file into /tmp
+        # small wait to allow IO thread to write file (performIO returns after writing/OK)
+        timeout = 2.0
+        t0 = time.time()
+        while not os.path.exists(local_file_path) and (time.time() - t0) < timeout:
+            time.sleep(0.01)
+        if not os.path.exists(local_file_path):
+            # fallback to direct download if centralized IO failed
+            download_file(blobName, local_file_path)
+    except Exception:
+        # fallback to direct download
+        download_file(blobName, local_file_path)
 
     # format image as (batch, RGB, width, height)
     img = mx.image.imread(local_file_path)
@@ -36,4 +55,11 @@ def lambda_handler(event):
         # print('With prob = %.5f, it contains %s' % (prob[0,i].asscalar(), labels[i]))
         inference = inference + 'With prob = %.5f, it contains %s' % (prob[0,i].asscalar(), labels[i]) + '. '
         # inference = inference + 'With prob = %.5f, it contains ' % (prob[0,i].asscalar()) + '. '
-    return {"result = ":inference}
+    
+    try:
+        if os.path.exists(local_file_path):
+            os.remove(local_file_path)
+    except:
+        pass
+    
+    return {"result = ": inference, "output_file": blobName}

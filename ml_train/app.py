@@ -7,6 +7,7 @@ import pandas as pd
 import re
 import warnings
 from storage_helper import download_file, upload_file
+from dnld_blob import download_blob_new
 
 warnings.filterwarnings("ignore")
 
@@ -25,14 +26,27 @@ def lambda_handler(event):
     t1 = time.time()
     blobName = event.get("input_file", df_name)
     pid = str(os.getpid())
-    local_input_path = os.path.join(TMP_DIR, f"{pid}_{blobName}")
+
+    base = os.path.basename(blobName)
+    name, ext = os.path.splitext(base)
+    proc_blob_name = f"{name}_{pid}{ext}"
+    local_file_path = os.path.join(TMP_DIR, proc_blob_name)
     
-    download_file(blobName, local_input_path)
+    try:
+        download_blob_new(blobName)
+        timeout = 10.0
+        t0 = time.time()
+        while not os.path.exists(local_file_path) and (time.time() - t0) < timeout:
+            time.sleep(0.05)
+        if not os.path.exists(local_file_path):
+            download_file(blobName, local_file_path)
+    except Exception:
+        download_file(blobName, local_file_path)
     
     t2 = time.time()
     print("Time 1 = " + str(t2-t1))
 
-    df = pd.read_csv(local_input_path)
+    df = pd.read_csv(local_file_path)
     df['train'] = df['Text'].apply(cleanup)
 
     model = LogisticRegression(max_iter=10)
@@ -52,4 +66,12 @@ def lambda_handler(event):
     t4 = time.time()
     print("Time 3 = " + str(t4-t3))
 
-    return {"Ok":"done"}
+    try:
+        if os.path.exists(local_file_path):
+            os.remove(local_file_path)
+        if os.path.exists(local_output_path):
+            os.remove(local_output_path)
+    except:
+        pass
+
+    return {"ML": "Trained", "output_file": output_filename}
