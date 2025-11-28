@@ -13,6 +13,14 @@ spec:
           ports:
             - containerPort: 8081
               protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: false
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
           env:
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
