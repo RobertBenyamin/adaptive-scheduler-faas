@@ -78,9 +78,15 @@ def lambda_func(service, service_name):
         payload = {"name": "test"}
 
     # Perform POST to the IP, but override the Host header
-    r = requests.post(target_ip, headers=headers, json=payload)
+    try:
+        r = requests.post(target_ip, headers=headers, json=payload)
+        # safer debug output
+        print(f"status={r.status_code} url={service} body={repr(r.text)}")
+    except requests.exceptions.RequestException as e:
+        # network / connection error
+        print(f"request error for {service}: {e}")
+        r = None
 
-    print(r.text)
     t2 = time.time()
     times.append(t2 - t1)
 
