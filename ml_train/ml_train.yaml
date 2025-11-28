@@ -6,7 +6,7 @@ metadata:
 spec:
   template:
     spec:
-      containerConcurrency: 1000
+      containerConcurrency: 20
       containers:
         - image: kind.local/server-ml-train:1.1.0
           imagePullPolicy: IfNotPresent
@@ -45,6 +45,7 @@ spec:
               cpu: 500m
     metadata:
       annotations:
-        autoscaling.knative.dev/target: "100"
+        autoscaling.knative.dev/target: "10"
         autoscaling.knative.dev/max-scale: "10"
+        autoscaling.knative.dev/minScale: "1" 
         autoscaling.knative.dev/scale-to-zero-pod-retention-period: "1h"
