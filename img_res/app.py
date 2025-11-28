@@ -36,7 +36,7 @@ def lambda_handler(event):
     bottom = 3 * height / 5
     im1 = image.crop((left, top, right, bottom))
 
-    output_filename = f"resized-{input_filename}" 
+    output_filename = f"resized-{pid}-{input_filename}" 
     local_output_path = os.path.join(TMP_DIR, output_filename)
 
     im1.save(local_output_path)

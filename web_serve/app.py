@@ -50,7 +50,7 @@ def lambda_handler(event):
                 continue  # Ignore malformed lines
 
     # Write new balance and append this transaction
-    output_filename = f"transaction-{blobName}"
+    output_filename = f"transaction-{pid}-{blobName}"
     local_output_path = os.path.join(TMP_DIR, output_filename)
     with open(output_filename, "w") as new_file:
         new_file.write(f"{balance}\n")

@@ -15,7 +15,7 @@ def lambda_handler(event):
     proc_blob_name = f"{name}_{pid}{ext}"
     local_file_path = os.path.join(TMP_DIR, proc_blob_name)
     local_output_path = os.path.join(TMP_DIR, f"output_{pid}.avi")
-    
+
     try:
         download_blob_new(input_filename)
         timeout = 5.0
@@ -48,7 +48,7 @@ def lambda_handler(event):
     video.release()
     out.release()
 
-    output_filename = f"processed_{pid}.avi"
+    output_filename = f"processed_{pid}_{name}.avi"
     upload_file(local_output_path, output_filename)
 
     try:

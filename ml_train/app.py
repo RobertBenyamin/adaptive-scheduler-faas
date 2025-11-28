@@ -31,7 +31,7 @@ def lambda_handler(event):
     name, ext = os.path.splitext(base)
     proc_blob_name = f"{name}_{pid}{ext}"
     local_file_path = os.path.join(TMP_DIR, proc_blob_name)
-    
+
     try:
         download_blob_new(blobName)
         timeout = 10.0
@@ -56,7 +56,7 @@ def lambda_handler(event):
     t3 = time.time()
     print("Time 2 = " + str(t3-t2))
 
-    output_filename = f'finalized_model_{pid}.sav'
+    output_filename = f'finalized_model_{pid}_{name}.sav'
     local_output_path = os.path.join(TMP_DIR, output_filename)
 
     with open(local_output_path, 'wb') as f:

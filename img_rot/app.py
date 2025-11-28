@@ -29,7 +29,7 @@ def lambda_handler(event):
     image = Image.open(local_file_path)
     img = image.transpose(Image.ROTATE_90)
 
-    output_filename = f"rotated-{input_filename}"
+    output_filename = f"rotated-{pid}-{input_filename}"
     local_output_path = os.path.join(TMP_DIR, output_filename)
 
     img.save(local_output_path)
