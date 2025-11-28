@@ -50,7 +50,7 @@ def lambda_handler(event):
     df['train'] = df['Text'].apply(cleanup)
 
     model = LogisticRegression(max_iter=10)
-    tfidf_vector = TfidfVectorizer(min_df=1000).fit(df['train'])
+    tfidf_vector = TfidfVectorizer(min_df=0.01).fit(df['train'])
     train = tfidf_vector.transform(df['train'])
     model.fit(train, df['Score'])
     t3 = time.time()
