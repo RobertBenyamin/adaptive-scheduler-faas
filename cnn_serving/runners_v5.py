@@ -469,22 +469,30 @@ def waitTermination(childPid):
                 # fallback: leave queue intact (entry might not exist anymore)
                 pass
             
-            mapPIDtoStatus[nextProcess] = "running"
+            if nextProcess in mapPIDtoStatus:
+                mapPIDtoStatus[nextProcess] = "running"
 
-            try:
-                os.kill(nextProcess, signal.SIGCONT)
-                now = time.time()
+                try:
+                    os.kill(nextProcess, signal.SIGCONT)
+                    now = time.time()
 
-                # Before resuming, accumulate wait segment into acc_wait and clear last_wait_start
-                acc_w, last_wait = processTimestamps.get(nextProcess, (0.0, None))
-                if last_wait:
-                    acc_w += now - last_wait
-                processTimestamps[nextProcess] = (acc_w, None)
+                    # Before resuming, accumulate wait segment into acc_wait and clear last_wait_start
+                    acc_w, last_wait = processTimestamps.get(nextProcess, (0.0, None))
+                    if last_wait:
+                        acc_w += now - last_wait
+                    processTimestamps[nextProcess] = (acc_w, None)
 
-                # Reset waktu mulai eksekusi
-                processStartTime[nextProcess] = now
-            except Exception as e:
-                print(f"Error resuming process {nextProcess}: {e}")
+                    # Reset waktu mulai eksekusi
+                    processStartTime[nextProcess] = now
+                except ProcessLookupError:
+                    # This handles the specific race condition where the process is gone
+                    print(f"Scheduler: Process {nextProcess} disappeared before it could be resumed.")
+                    mapPIDtoStatus.pop(nextProcess, None) # Clean up
+                except Exception as e:
+                    print(f"Error resuming process {nextProcess}: {e}")
+            else:
+                # This handles the case where the process was already cleaned up but its PID was still in the queue
+                print(f"Scheduler: Stale PID {nextProcess} found in queue, skipping.")
 
     lockPIDMap.release()
 
