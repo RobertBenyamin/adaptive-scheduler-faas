@@ -50,7 +50,7 @@ TEST_DATA_CONFIG = {
     "img-rot":     [f"img{i}.jpg" for i in range(1, 41)],
     "img-res":     [f"img{i}.jpg" for i in range(1, 41)],
     "vid-proc":    [f"vid{i}.mp4" for i in range(1, 11)],
-    "ml-train":    [f"dataset{i}.csv" for i in range(1, 11)],
+    "ml-train":    [f"dataset{i}.csv" for i in range(1, 6)],
     "web-serve":   [f"account{i}.txt" for i in range(1, 11)],
 }
 
