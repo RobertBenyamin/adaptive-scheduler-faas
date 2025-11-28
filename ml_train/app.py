@@ -49,7 +49,7 @@ def lambda_handler(event):
     df = pd.read_csv(local_file_path)
     df['train'] = df['Text'].apply(cleanup)
 
-    model = LogisticRegression(max_iter=10)
+    model = LogisticRegression(max_iter=1000)
     tfidf_vector = TfidfVectorizer(min_df=0.01).fit(df['train'])
     train = tfidf_vector.transform(df['train'])
     model.fit(train, df['Score'])
