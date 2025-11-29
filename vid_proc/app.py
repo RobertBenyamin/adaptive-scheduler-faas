@@ -49,7 +49,7 @@ def lambda_handler(event):
     out.release()
 
     output_filename = f"processed_{pid}_{name}.avi"
-    upload_file(local_output_path, output_filename)
+    # upload_file(local_output_path, output_filename)
 
     try:
         if os.path.exists(local_file_path):

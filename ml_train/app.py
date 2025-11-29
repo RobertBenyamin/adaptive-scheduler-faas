@@ -62,7 +62,7 @@ def lambda_handler(event):
     with open(local_output_path, 'wb') as f:
         pickle.dump(model, f)
 
-    upload_file(local_output_path, output_filename)
+    # upload_file(local_output_path, output_filename)
     t4 = time.time()
     print("Time 3 = " + str(t4-t3))
 

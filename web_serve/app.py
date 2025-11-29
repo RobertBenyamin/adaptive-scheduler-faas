@@ -58,7 +58,7 @@ def lambda_handler(event):
         for line in lines[1:]:
             new_file.write(line)
 
-    upload_file(local_output_path, output_filename)
+    # upload_file(local_output_path, output_filename)
 
     try:
         if os.path.exists(local_file_path):
