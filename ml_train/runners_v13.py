@@ -176,7 +176,7 @@ def updateThread():
         clientSocket.close()
 
 
-def myFunction(data_, clientSocket_):
+def myFunction(data_, clientSocket_, arrival_time):
     global actionModule
     global numCores
 
@@ -196,6 +196,10 @@ def myFunction(data_, clientSocket_):
     # Set the main function
     if numCoreFlag == False:
         result = actionModule.lambda_handler(message)
+
+        # Calculate turnaround time and add it to the response
+        turnaround_time = time.time() - arrival_time
+        result["runner_turnaround_time"] = turnaround_time
 
         # Send the result (Test Pid)
         result["myPID"] = os.getpid()
@@ -774,7 +778,7 @@ def handle_client_connection(clientSocket, address):
         childProcess = os.fork()
         if childProcess == 0:
             # Child process: run the function and exit
-            myFunction(data_, clientSocket)
+            myFunction(data_, clientSocket, time.time())
             os._exit(os.EX_OK)
         else:
             # Append submit time to the responseMapWindows
