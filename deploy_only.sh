@@ -28,3 +28,9 @@ sudo kubectl patch configmap/config-domain \
   -n knative-serving \
   --type merge \
   -p '{"data":{"172.31.30.118.sslip.io":""}}' # Private IP Master Node
+
+# Increase the default request timeout to 10 minutes (600s)
+sudo kubectl patch configmap/config-defaults \
+  -n knative-serving \
+  --type merge \
+  -p '{"data":{"revision-timeout-seconds": "600"}}'
