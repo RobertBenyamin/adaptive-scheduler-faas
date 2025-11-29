@@ -5,7 +5,7 @@ import time
 import numpy as np
 import threading
 import requests
-from statistics import mean, median,variance,stdev
+from statistics import mean, median, variance, stdev
 
 
 # IP address of the ingress (could be LoadBalancer, NodePort, etc.)
@@ -25,7 +25,7 @@ def getUrlByFuncName(funcName):
         return None
     lines = output.splitlines()
     for line in lines:
-        if "URL:"  in line:
+        if "URL:" in line:
             url = line.split()[1]
             return url
 
@@ -37,7 +37,7 @@ services = []
 serviceNames = []
 
 for line in lines:
-    serviceName = line.split()[0] 
+    serviceName = line.split()[0]
     if serviceName not in serviceNames:
         serviceNames.append(serviceName)
 
@@ -54,7 +54,22 @@ TEST_DATA_CONFIG = {
     "web-serve":   [f"account{i}.txt" for i in range(1, 11)],
 }
 
-def lambda_func(service, service_name):
+# --- NEW: Deliberate Test Sequences ---
+# A dictionary of deliberate, non-random request patterns.
+# This creates a challenging scenario to test the scheduler's ability
+# to prioritize short jobs when long jobs are also present.
+# The pattern is generally [long, long, long, short, short, long] to create a "traffic jam".
+TEST_SEQUENCES = {
+    "cnn-serving": [f"img{i}.jpg" for i in [40, 38, 39, 5, 2, 1, 40]],
+    "img-rot":     [f"img{i}.jpg" for i in [40, 38, 39, 5, 2, 1, 40]],
+    "img-res":     [f"img{i}.jpg" for i in [40, 38, 39, 5, 2, 1, 40]],
+    "vid-proc":     [f"vid{i}.mp4" for i in [10, 9, 8, 1, 2, 9]],
+    "ml-train":    [f"dataset{i}.csv" for i in [5, 4, 3, 1, 2, 4]],
+    "web-serve":   [f"account{i}.txt" for i in [10, 9, 8, 2, 1, 3, 10]],
+}
+
+# --- MODIFIED FUNCTION SIGNATURE: Added 'request_index' ---
+def lambda_func(service, service_name, request_index):
     global times
     t1 = time.time()
 
@@ -64,14 +79,18 @@ def lambda_func(service, service_name):
         "Content-Type": "application/json"
     }
 
-    # Create payload based on service
+    # --- MODIFIED PAYLOAD CREATION ---
     payload = {}
-    if service_name in TEST_DATA_CONFIG:
-        # Get the list of possible input files for the current service
+    # Use the deliberate test sequence if available for the service
+    if service_name in TEST_SEQUENCES:
+        sequence = TEST_SEQUENCES[service_name]
+        # Cycle through the sequence if the number of requests exceeds its length
+        input_file = sequence[request_index % len(sequence)]
+        payload = {"input_file": input_file}
+    # Fallback to random choice if not in the deliberate test sequences
+    elif service_name in TEST_DATA_CONFIG:
         possible_inputs = TEST_DATA_CONFIG[service_name]
-        # Choose one randomly
         input_file = random.choice(possible_inputs)
-        # Use a generic key like "input_file" in the payload
         payload = {"input_file": input_file}
     else:
         # Default payload if service is not in our config
@@ -94,7 +113,7 @@ def EnforceActivityWindow(start_time, end_time, instance_events):
     events_iit = []
     events_abs = [0] + instance_events
     event_times = [sum(events_abs[:i]) for i in range(1, len(events_abs) + 1)]
-    event_times = [e for e in event_times if (e > start_time)and(e < end_time)]
+    event_times = [e for e in event_times if (e > start_time) and (e < end_time)]
     try:
         events_iit = [event_times[0]] + [event_times[i]-event_times[i-1]
                                          for i in range(1, len(event_times))]
@@ -112,14 +131,14 @@ for load in loads:
     duration = 2
     seed = 100
     rate = load
-    # generate Poisson's distribution of events 
+    # generate Poisson's distribution of events
     inter_arrivals = []
     np.random.seed(seed)
     beta = 1.0/rate
     oversampling_factor = 2
     inter_arrivals = list(np.random.exponential(scale=beta, size=int(oversampling_factor*duration*rate)))
-    instance_events = EnforceActivityWindow(0,duration,inter_arrivals)
-        
+    instance_events = EnforceActivityWindow(0, duration, inter_arrivals)
+
     for service in services:
         
         threads = []
@@ -130,13 +149,16 @@ for load in loads:
         current_service_name = serviceNames[services.index(service)]
 
         st = 0
-        for t in instance_events:
+        # --- MODIFIED REQUEST GENERATION LOOP ---
+        # Use enumerate to get the index of each request
+        for i, t in enumerate(instance_events):
             st = st + t - (after_time - before_time)
             before_time = time.time()
             if st > 0:
                 time.sleep(st)
 
-            threadToAdd = threading.Thread(target=lambda_func, args=(service, current_service_name))
+            # Pass the request index 'i' to the lambda_func
+            threadToAdd = threading.Thread(target=lambda_func, args=(service, current_service_name, i))
             threads.append(threadToAdd)
             threadToAdd.start()
             after_time = time.time()
@@ -154,4 +176,3 @@ for load in loads:
         print(f"all times note for {load_desc[loads.index(load)]}", file=output_file, flush=True)
         print(times, file=output_file, flush=True)
 
-        
