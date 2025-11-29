@@ -39,31 +39,63 @@ def run_cmd(cmd, shell=False):
         print(f"Command failed: {cmd}")
         sys.exit(1)
 
+def wait_for_ksvc_ready(services, namespace="default", timeout=600):
+    """Waits for Knative services to have the 'Ready' condition set to true."""
+    print(f"Waiting for Knative services to become ready in namespace '{namespace}'...")
+    for service in services:
+        print(f"Waiting for service: {service}...")
+        cmd = [
+            "kubectl", "wait", "ksvc", service,
+            f"--namespace={namespace}",
+            "--for=condition=Ready",
+            f"--timeout={timeout}s"
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            print(f"Error: Timed out waiting for service '{service}' to become ready.")
+            print(f"Stdout: {result.stdout}")
+            print(f"Stderr: {result.stderr}")
+            print(f"Getting status of ksvc '{service}' for debugging:")
+            subprocess.run(["kubectl", "get", "ksvc", service, "-n", namespace, "-o", "yaml"])
+            sys.exit(1)
+        print(f"Service '{service}' is ready.")
+    print("All Knative services are ready.")
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("basename", type=str, help="Base name for output files (e.g. runners5)")
     parser.add_argument("repeat", type=int, help="How many times to repeat the experiment")
     args = parser.parse_args()
 
+    # List of Knative services deployed by deploy_app.sh
+    service_names = [
+        "cnn-serving", "ml-train", "web-serve",
+        "img-res", "img-rot", "vid-proc"
+    ]
+
     for i in range(1, args.repeat + 1):
         print(f"\n=== RUN {i} of {args.repeat} ===\n")
         # 1. stop.sh
         run_cmd(["bash", "stop.sh"])
-        time.sleep(30)
+
         # 2. deploy_only.sh
         run_cmd(["bash", "deploy_only.sh"])
-        time.sleep(30)
+
         # 3. deploy_app.sh
         run_cmd(["bash", "deploy_app.sh"])
-        time.sleep(30)
-        # 4. Get kourier IP
+        
+        # 4. Wait for all Knative services to be ready
+        wait_for_ksvc_ready(service_names)
+
+        # 5. Get kourier IP
         ip = get_kourier_ip()
         print(f"Kourier IP: {ip}")
-        time.sleep(30)
-        # 5. python3 knative.py --target_ip xx.xx.xx.xx
+        
+        # 6. python3 knative.py --target_ip xx.xx.xx.xx
         run_cmd(["python3", "knative.py", "--target_ip", ip])
         time.sleep(30)
-        # 6. python3 analyze.py --output_file output.xlsx
+        
+        # 7. python3 analyze.py --output_file output.xlsx
         output_file = f"{args.basename}-{i}.xlsx"
         run_cmd(["python3", "analyze.py", "--output_file", output_file])
         print(f"=== Finished run {i} ===\n")
