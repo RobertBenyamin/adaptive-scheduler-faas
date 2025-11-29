@@ -7,17 +7,14 @@ import socket
 import numpy as np
 import time
 import signal
-import requests
-from threading import Thread
 from storage_helper import download_file, upload_file
-from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 import heapq
 
 current_path = "/app/pythonAction"
+TMP_DIR = "/tmp" 
 BETA = 0.3  # Weight for wait time
 processQueue = []
-processStartTime = {}
 
 
 def signal_handler(sig, frame):
@@ -98,11 +95,13 @@ valueTable = {}
 mapPIDtoIO = {}
 lockCache = threading.Lock()
 
-processTimestamps = {}  # {pid: (initial_burst, start_time)}
+processTimestamps = {}  # {pid: (total_wait, last_wait_start_time)}
 FUNCTION_HISTORY_KEY = "function_history"
 # Menyimpan histori eksekusi proses
 processExecutionHistory = {FUNCTION_HISTORY_KEY: []}
 processStartTime = {}
+processExecutedTime = {}  # {pid: accumulated_executed_seconds}
+
 
 lockPIDMap = threading.Lock()
 requestQueue = []  # queue of child processes
@@ -113,9 +112,16 @@ responseMapWindows = []  # map from pid to response
 
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
+# cache for burst time predictions
+_burst_time_cache = {
+    'prediction': None,
+    'history_size': 0,
+    'timestamp': 0,
+    'lock': threading.Lock()
+}
+
+
 # The function to update the core nums by request.
-
-
 def updateThread():
     # Shared vaiable: numCores
     global numCores
@@ -171,9 +177,6 @@ def updateThread():
 
 
 def myFunction(data_, clientSocket_):
-    # Measure the start time for burst time calculation
-    startTime = time.time()
-
     global actionModule
     global numCores
 
@@ -224,30 +227,10 @@ def myFunction(data_, clientSocket_):
         clientSocket_.close()
     clientSocket_.close()
 
-    # Measure the end time for burst time calculation
-    endTime = time.time()
-
-    # Return the measured burst time (execution time)
-    burstTime = endTime - startTime
-    return burstTime
-
-# Fungsi EWMA (Exponential Weighted Moving Average)
-
-
-def calculate_ewma(history, alpha=0.8):
-    if not history:
-        return 0  # Jika tidak ada data, kembalikan 0
-    ewma = history[0]  # Nilai awal
-    for val in history[1:]:
-        ewma = alpha * val + (1 - alpha) * ewma
-    return ewma
-
-# Model Training (Random Forest)
-
 
 def train_models(history):
     if len(history) < 5:  # Butuh minimal 5 data untuk regresi
-        return np.mean(history), np.mean(history)
+        return np.mean(history)
 
     X = np.array(range(len(history))).reshape(-1, 1)
     y = np.array(history)
@@ -255,40 +238,54 @@ def train_models(history):
     # Model Random Forest
     rf_model = RandomForestRegressor(n_estimators=10, random_state=42)
     rf_model.fit(X, y)
-    rf_pred = rf_model.predict([[len(history)]])[
-        0]  # Prediksi waktu berikutnya
+    rf_pred = rf_model.predict([[len(history)]])[0]  # Prediksi waktu berikutnya
 
     return rf_pred
 
 
-# Parameter Mitigasi Ketidakpastian
-ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
-BETA_RT = 0.3   # Faktor penalti standar deviasi
+def get_burst_time_prediction():
+    """
+    Get or calculate burst time prediction with caching.
+    Only retrains when history changes.
+    """
+    global _burst_time_cache
+    
+    history = processExecutionHistory[FUNCTION_HISTORY_KEY]
+    current_history_size = len(history)
+    
+    with _burst_time_cache['lock']:
+        # Check if cache is valid
+        if (current_history_size == _burst_time_cache['history_size'] and
+            _burst_time_cache['prediction'] is not None):
+            # Cache hit - return cached prediction
+            return _burst_time_cache['prediction']
+        
+        # Cache miss or history changed - recalculate
+        prediction = train_models(history) if history else 2.0
+        
+        # Update cache
+        _burst_time_cache['prediction'] = prediction
+        _burst_time_cache['history_size'] = current_history_size
+        _burst_time_cache['timestamp'] = time.time()
+        
+        return prediction
 
 # Fungsi Menghitung Remaining Time
-
-
 def calculate_remaining_time(pid):
     """
-    Menghitung sisa waktu eksekusi menggunakan Random Forest prediction.
+    Calculate remaining time using cached burst time prediction.
     """
-    history = processExecutionHistory[FUNCTION_HISTORY_KEY]
+    # Get cached prediction (trains only if history changed)
+    estimated_burst_time = get_burst_time_prediction()
 
-    if not history:
-        # Gunakan initial burst time jika belum ada histori
-        # Default 2 detik jika tidak ditemukan
-        initial_burst, _ = processTimestamps.get(pid, (2, time.time()))
-        return initial_burst
+    # Calculate elapsed time
+    elapsed_time = processExecutedTime.get(pid, 0)
+    if pid in processStartTime:
+        elapsed_time += time.time() - processStartTime[pid]
 
-    # Machine Learning Predictions (Random Forest only)
-    rf_pred = train_models(history)
-
-    # Hitung waktu yang sudah berjalan
-    elapsed_time = time.time() - processStartTime.get(pid, time.time())
-
-    # Estimasi Sisa Waktu
-    remaining_time = max(rf_pred - elapsed_time, 0)
-
+    # Remaining = total - elapsed
+    remaining_time = max(estimated_burst_time - elapsed_time, 0)
+    
     return remaining_time
 
 
@@ -303,8 +300,9 @@ def calculate_total_wait_time(processQueue):
         _, pid = process_item
         if pid in processTimestamps:
             # Calculate individual wait time
-            _, start_time = processTimestamps[pid]
-            total_wait_time += (current_time - start_time)
+            acc_wait, last_wait = processTimestamps[pid]
+            individual_wait = acc_wait + (current_time - last_wait if last_wait else 0.0)
+            total_wait_time += individual_wait
 
     return total_wait_time
 
@@ -326,7 +324,6 @@ def calculate_dynamic_beta(total_wait_time, num_tasks):
 # Batas waktu maksimum sebelum preemption terjadi (dalam detik)
 PREEMPTION_THRESHOLD = 4
 
-
 def waitTermination(childPid):
     """
     Menunggu proses selesai atau menggantinya jika ada proses lebih prioritas dengan preemption.
@@ -342,12 +339,15 @@ def waitTermination(childPid):
         mapPIDtoStatus.pop(childPid, None)
 
         # Simpan burst time ke history
+        total_executed = processExecutedTime.get(childPid, 0.0)
         if childPid in processStartTime:
-            elapsed = time.time() - processStartTime[childPid]
-
-            # Use the constant key to aggregate history for the function
-            processExecutionHistory[FUNCTION_HISTORY_KEY].append(elapsed)
-
+            total_executed += time.time() - processStartTime[childPid]
+        processExecutionHistory[FUNCTION_HISTORY_KEY].append(total_executed)
+        
+        # Clean up tracking structures for finished process
+        processTimestamps.pop(childPid, None)
+        processStartTime.pop(childPid, None)
+        processExecutedTime.pop(childPid, None)
     except Exception as e:
         print(f"Error removing process {childPid}: {e}")
 
@@ -360,8 +360,8 @@ def waitTermination(childPid):
 
             # Calculate individual wait time
             if pid in processTimestamps:
-                _, start_time = processTimestamps[pid]
-                individual_wait_time = time.time() - start_time
+                acc_wait, last_wait = processTimestamps[pid]
+                individual_wait_time = acc_wait + (time.time() - last_wait if last_wait else 0.0)
             else:
                 individual_wait_time = 0
 
@@ -406,22 +406,66 @@ def waitTermination(childPid):
 
                     # Hentikan proses yang berjalan
                     try:
+                        # sebelum SIGSTOP, akumulasikan waktu yang sudah berjalan
+                        if current_running_pid in processStartTime:
+                            elapsed_since_start = time.time() - processStartTime[current_running_pid]
+                            processExecutedTime[current_running_pid] = processExecutedTime.get(current_running_pid, 0) + elapsed_since_start
+                            processStartTime.pop(current_running_pid, None)
                         os.kill(current_running_pid, signal.SIGSTOP)
-                        mapPIDtoStatus[current_running_pid] = "paused"
+                        mapPIDtoStatus[current_running_pid] = "waiting"
+
+                        # set last_wait_start (keep accumulated if any)
+                        acc_w, _ = processTimestamps.get(current_running_pid, (0.0, None))
+                        processTimestamps[current_running_pid] = (acc_w, time.time())
+
+                        try:
+                            heapq.heappush(processQueue, (calculate_remaining_time(current_running_pid), current_running_pid))
+                        except Exception as e:
+                            print(f"Error pushing process {current_running_pid} back to queue: {e}")
                     except Exception as e:
                         print(
                             f"Error stopping process {current_running_pid}: {e}")
 
             # Jalankan proses dengan prioritas tertinggi
-            processQueue.remove((_, nextProcess))
-            mapPIDtoStatus[nextProcess] = "running"
+            removed = False
+            for i, item in enumerate(processQueue):
+                if item[1] == nextProcess:
+                    processQueue.pop(i)
+                    # rebuild heap
+                    try:
+                        heapq.heapify(processQueue)
+                    except Exception:
+                        pass
+                    removed = True
+                    break
+            if not removed:
+                # fallback: leave queue intact (entry might not exist anymore)
+                pass
+            
+            if nextProcess in mapPIDtoStatus:
+                mapPIDtoStatus[nextProcess] = "running"
 
-            try:
-                os.kill(nextProcess, signal.SIGCONT)
-                # Reset waktu mulai eksekusi
-                processStartTime[nextProcess] = time.time()
-            except Exception as e:
-                print(f"Error resuming process {nextProcess}: {e}")
+                try:
+                    os.kill(nextProcess, signal.SIGCONT)
+                    now = time.time()
+
+                    # Before resuming, accumulate wait segment into acc_wait and clear last_wait_start
+                    acc_w, last_wait = processTimestamps.get(nextProcess, (0.0, None))
+                    if last_wait:
+                        acc_w += now - last_wait
+                    processTimestamps[nextProcess] = (acc_w, None)
+
+                    # Reset waktu mulai eksekusi
+                    processStartTime[nextProcess] = now
+                except ProcessLookupError:
+                    # This handles the specific race condition where the process is gone
+                    print(f"Scheduler: Process {nextProcess} disappeared before it could be resumed.")
+                    mapPIDtoStatus.pop(nextProcess, None) # Clean up
+                except Exception as e:
+                    print(f"Error resuming process {nextProcess}: {e}")
+            else:
+                # This handles the case where the process was already cleaned up but its PID was still in the queue
+                print(f"Scheduler: Stale PID {nextProcess} found in queue, skipping.")
 
     lockPIDMap.release()
 
@@ -454,14 +498,37 @@ def performIO(clientSocket_):
     blobName = message["blobName"]
     blockedID = message["pid"]
 
-    my_id = threading.get_native_id()
+    my_id = blockedID
 
     lockPIDMap.acquire()
     mapPIDtoStatus[blockedID] = "blocked"
+    # Mark blocked: accumulate running time before blocking so accounting stays correct
+    # (do this while holding lock)
+    if blockedID in processStartTime:
+        elapsed = time.time() - processStartTime[blockedID]
+        processExecutedTime[blockedID] = processExecutedTime.get(blockedID, 0.0) + elapsed
+        processStartTime.pop(blockedID, None)
     for child in mapPIDtoStatus.copy():
         if child in mapPIDtoStatus:
             if mapPIDtoStatus[child] == "waiting":
                 mapPIDtoStatus[child] = "running"
+                # remove any queued entries for this pid (heapq/queue may contain tuple entries)
+                try:
+                    # safe linear scan remove (queue is small)
+                    for i, item in enumerate(processQueue):
+                        if item[1] == child:
+                            processQueue.pop(i)
+                            heapq.heapify(processQueue)
+                            break
+                except Exception:
+                    pass
+                # accumulate wait segment -> clear last_wait, set start time
+                now = time.time()
+                acc_w, last_wait = processTimestamps.get(child, (0.0, None))
+                if last_wait:
+                    acc_w += now - last_wait
+                processTimestamps[child] = (acc_w, None)
+                processStartTime[child] = now
                 try:
                     os.kill(child, signal.SIGCONT)
                     break
@@ -493,9 +560,9 @@ def performIO(clientSocket_):
             checkTableShadow[my_id] = []
             checkTable[blobName].append(my_id)
             lockCache.release()
-            blob_storage = blobName.split("_")[0]
-            download_file(blobName, f"{current_path}/{blobName}")
-            with open(f"{current_path}/{blobName}", "rb") as file:
+
+            download_file(blobName, os.path.join(TMP_DIR, blobName))
+            with open(os.path.join(TMP_DIR, blobName), "rb") as file:
                 blob_val = file.read()
 
             lockCache.acquire()
@@ -509,12 +576,27 @@ def performIO(clientSocket_):
         full_blob_name = blobName.split(".")
         proc_blob_name = full_blob_name[0] + "_" + \
             str(blockedID) + "." + full_blob_name[1]
-        with open(proc_blob_name, "wb") as my_blob:
-            my_blob.write(blob_val)
+        proc_path = os.path.join(TMP_DIR, proc_blob_name)
+        tmp_proc_path = proc_path + ".part"
+        try:
+            # write to temp, flush and sync, then atomically move into place
+            with open(tmp_proc_path, "wb") as my_blob:
+                my_blob.write(blob_val)
+                my_blob.flush()
+                os.fsync(my_blob.fileno())
+            os.replace(tmp_proc_path, proc_path)
+        except Exception:
+            # best-effort cleanup on failure
+            try:
+                if os.path.exists(tmp_proc_path):
+                    os.remove(tmp_proc_path)
+            except:
+                pass
     else:
         fReadname = message["value"]
         fRead = open(fReadname, "rb")
         value = fRead.read()
+
         upload_file(f"{current_path}/{value}", f"files/{blobName}")
         blob_val = "none"
 
@@ -525,10 +607,28 @@ def performIO(clientSocket_):
             numRunning += 1
     if numRunning < numCores:
         mapPIDtoStatus[blockedID] = "running"
-        os.kill(blockedID, signal.SIGCONT)
+        now = time.time()
+        acc_w, last_wait = processTimestamps.get(blockedID, (0.0, None))
+        if last_wait:
+            acc_w += now - last_wait
+        processTimestamps[blockedID] = (acc_w, None)
+        processStartTime[blockedID] = now
+        try:
+            os.kill(blockedID, signal.SIGCONT)
+        except:
+            pass
     else:
         mapPIDtoStatus[blockedID] = "waiting"
-        os.kill(blockedID, signal.SIGSTOP)
+        acc_w, _ = processTimestamps.get(blockedID, (0.0, None))
+        processTimestamps[blockedID] = (acc_w, time.time())
+        try:
+            heapq.heappush(processQueue, (calculate_remaining_time(blockedID), blockedID))
+        except Exception:
+            pass
+        try:
+            os.kill(blockedID, signal.SIGSTOP)
+        except:
+            pass
     lockPIDMap.release()
 
     messageToRet = json.dumps({"value": "OK"})
@@ -558,39 +658,180 @@ def IOThread():
         threading.Thread(target=performIO, args=(clientSocket,)).start()
 
 
-def run():
-
-    # serverSocket_: socket
-    # actionModule:  the module to execute
-    # requestQueue:
-    # mapPIDtoStatus: store status for each process (waiting / running)
-    global serverSocket_
-    global actionModule
+def handle_client_connection(clientSocket, address):
+    """Handle a single client connection in a separate thread"""
     global requestQueue
     global mapPIDtoStatus
     global numCores
     global responseMapWindows
     global affinity_mask
     global processQueue
-    global processStartTime
 
-    # Set the core of mxcontainer
+    try:
+        print("Accept a new connection from %s" % str(address), flush=True)
+        
+        data_ = b''
+        data_ += clientSocket.recv(1024)
+        dataStr = data_.decode('UTF-8')
+
+        # Check for Host header
+        if 'Host' not in dataStr:
+            msg = 'OK'
+            response_headers = {
+                'Content-Type': 'text/html; encoding=utf8',
+                'Content-Length': len(msg),
+                'Connection': 'close',
+            }
+            response_headers_raw = ''.join('%s: %s\r\n' % (k, v) for k, v in response_headers.items())
+            r = 'HTTP/1.1 200 OK\r\n'
+            try:
+                clientSocket.send(r.encode(encoding="utf-8"))
+                clientSocket.send(response_headers_raw.encode(encoding="utf-8"))
+                clientSocket.send('\r\n'.encode(encoding="utf-8"))
+                clientSocket.send(msg.encode(encoding="utf-8"))
+            except:
+                pass
+            finally:
+                clientSocket.close()
+            return
+
+        # Parse message
+        while True:
+            dataStrList = dataStr.splitlines()
+            message = None
+            try:
+                message = json.loads(dataStrList[-1])
+                break
+            except:
+                data_ += clientSocket.recv(1024)
+                dataStr = data_.decode('UTF-8')
+
+        responseFlag = False
+        
+        # Handle numCores, Q, Clear messages
+        if message != None:
+            if "numCores" in message:
+                numCores = int(message["numCores"])
+                result = {"Response": "Ok"}
+                responseMapWindows = []
+                if "affinity_mask" in message:
+                    affinity_mask = message["affinity_mask"]
+                    os.sched_setaffinity(0, affinity_mask)
+                msg = json.dumps(result)
+                responseFlag = True
+            elif "Q" in message:
+                i = []
+                for responseTime in responseMapWindows:
+                    if responseTime[1][1] != -1:
+                        i.append(responseTime[1][1] - responseTime[1][0])
+                result = {"p95": np.percentile(i, 95) if len(i) > 0 else 0}
+                result["affinity_mask"] = list(affinity_mask)
+                result["numCores"] = numCores
+                msg = json.dumps(result)
+                responseFlag = True
+            elif "Clear" in message:
+                responseMapWindows = []
+
+        if responseFlag:
+            response_headers = {
+                'Content-Type': 'text/html; encoding=utf8',
+                'Content-Length': len(msg),
+                'Connection': 'close',
+            }
+            response_headers_raw = ''.join('%s: %s\r\n' % (k, v) for k, v in response_headers.items())
+            r = 'HTTP/1.1 200 OK\r\n'
+            try:
+                clientSocket.send(r.encode(encoding="utf-8"))
+                clientSocket.send(response_headers_raw.encode(encoding="utf-8"))
+                clientSocket.send('\r\n'.encode(encoding="utf-8"))
+                clientSocket.send(msg.encode(encoding="utf-8"))
+            except:
+                pass
+            finally:
+                clientSocket.close()
+            return
+
+        # Get burst time prediction
+        estimated_burst_time = get_burst_time_prediction()
+
+        # a status mark of whether the process can run based on the free resources
+        waitForRunning = False
+
+        # The processes are running
+        numIsRunning = 0
+
+        lockPIDMap.acquire()
+        for child in mapPIDtoStatus.copy():
+            if mapPIDtoStatus[child] == "running":
+                numIsRunning += 1
+        if numIsRunning >= numCores:
+            waitForRunning = True # The process need to wait for resources
+
+        # slide windows
+        if len(responseMapWindows) >= 100:
+            responseMapWindows.pop(0)
+
+        childProcess = os.fork()
+        if childProcess == 0:
+            # Child process: run the function and exit
+            myFunction(data_, clientSocket)
+            os._exit(os.EX_OK)
+        else:
+            # Append submit time to the responseMapWindows
+            responseMapWindows.append([childProcess, [time.time(), -1]])
+            processStartTime[childProcess] = time.time()
+
+            # store (accumulated_wait_seconds, last_wait_start_timestamp_or_None)
+            processTimestamps[childProcess] = (0.0, None)
+            
+            if waitForRunning:
+                # If there is no free resources (cpu core) for the process to run, then we set the childprocess to sleep.
+                mapPIDtoStatus[childProcess] = "waiting"
+                os.kill(childProcess, signal.SIGSTOP)
+
+                # Push to priority queue (using burstTime for SRTF logic)
+                heapq.heappush(processQueue, (estimated_burst_time, childProcess))
+
+                processStartTime.pop(childProcess, None)
+                acc, _ = processTimestamps.get(childProcess, (0.0, None))
+                processTimestamps[childProcess] = (acc, time.time())
+            else:
+                mapPIDtoStatus[childProcess] = "running"
+                requestQueue.append(childProcess)
+
+            lockPIDMap.release()
+            
+            # Monitor child termination in separate thread
+            threadWait = threading.Thread(target=waitTermination, args=(childProcess,))
+            threadWait.daemon = True
+            threadWait.start()
+
+    except Exception as e:
+        print(f"Error handling client {address}: {e}", flush=True)
+    finally:
+        try:
+            clientSocket.close()
+        except:
+            pass
+
+def run():
+    global serverSocket_
+    global actionModule
+    global numCores
+
     numCores = 8
     os.sched_setaffinity(0, affinity_mask)
-
     print("Welcome... ", numCores)
 
-    # Set the address and port, the port can be acquired from environment variable
     myHost = '0.0.0.0'
     myPort = int(os.environ.get('PORT', 8081))
 
-    # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     serverSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     serverSocket.bind((myHost, myPort))
-    serverSocket.listen(1)
+    serverSocket.listen(10)
 
-    # serverSocket_ = serverSocket
+    serverSocket_ = serverSocket
 
     # Set actionModule
     import app
@@ -605,165 +846,27 @@ def run():
 
     # Monitor numCore update
     threadUpdate = threading.Thread(target=updateThread)
+    threadUpdate.daemon = True
     threadUpdate.start()
 
     # Monitor I/O Block
     threadIntercept = threading.Thread(target=IOThread)
+    threadIntercept.daemon = True
     threadIntercept.start()
 
-    # If a request come, then fork.
-    while (True):
-
-        (clientSocket, address) = serverSocket.accept()
-        print("Accept a new connection from %s" % str(address), flush=True)
-
-        data_ = b''
-
-        data_ += clientSocket.recv(1024)
-
-        dataStr = data_.decode('UTF-8')
-
-        if 'Host' not in dataStr:
-            msg = 'OK'
-            response_headers = {
-                'Content-Type': 'text/html; encoding=utf8',
-                'Content-Length': len(msg),
-                'Connection': 'close',
-            }
-            response_headers_raw = ''.join('%s: %s\r\n' % (
-                k, v) for k, v in response_headers.items())
-
-            response_proto = 'HTTP/1.1'
-            response_status = '200'
-            response_status_text = 'OK'  # this can be random
-
-            # sending all this stuff
-            r = '%s %s %s\r\n' % (
-                response_proto, response_status, response_status_text)
-            try:
-                clientSocket.send(r.encode(encoding="utf-8"))
-                clientSocket.send(
-                    response_headers_raw.encode(encoding="utf-8"))
-                # to separate headers from body
-                clientSocket.send('\r\n'.encode(encoding="utf-8"))
-                clientSocket.send(msg.encode(encoding="utf-8"))
-                clientSocket.close()
-                continue
-            except:
-                clientSocket.close()
-                continue
-
-        while True:
-            dataStrList = dataStr.splitlines()
-
-            message = None
-            try:
-                message = json.loads(dataStrList[-1])
-                break
-            except:
-                data_ += clientSocket.recv(1024)
-                dataStr = data_.decode('UTF-8')
-
-        responseFlag = False
-        if message != None:
-
-            if "numCores" in message:
-                numCores = int(message["numCores"])
-                result = {"Response": "Ok"}
-                responseMapWindows = []
-                if "affinity_mask" in message:
-                    affinity_mask = message["affinity_mask"]
-                    os.sched_setaffinity(0, affinity_mask)
-                msg = json.dumps(result)
-                responseFlag = True
-
-            if "Q" in message:
-                i = []
-                for responseTime in responseMapWindows:
-                    if responseTime[1][1] != -1:
-                        i.append(responseTime[1][1] - responseTime[1][0])
-                if len(i) == 0:
-                    result = {"p95": 0}
-                else:
-                    result = {"p95": np.percentile(i, 95)}
-                result["affinity_mask"] = list(affinity_mask)
-                result["numCores"] = numCores
-                msg = json.dumps(result)
-                responseFlag = True
-
-            if "Clear" in message:
-                responseMapWindows = []
-
-        if responseFlag == True:
-            response_headers = {
-                'Content-Type': 'text/html; encoding=utf8',
-                'Content-Length': len(msg),
-                'Connection': 'close',
-            }
-            response_headers_raw = ''.join('%s: %s\r\n' % (
-                k, v) for k, v in response_headers.items())
-
-            response_proto = 'HTTP/1.1'
-            response_status = '200'
-            response_status_text = 'OK'  # this can be random
-
-            # sending all this stuff
-            r = '%s %s %s\r\n' % (
-                response_proto, response_status, response_status_text)
-
-            clientSocket.send(r.encode(encoding="utf-8"))
-            clientSocket.send(response_headers_raw.encode(encoding="utf-8"))
-            # to separate headers from body
-            clientSocket.send('\r\n'.encode(encoding="utf-8"))
-            clientSocket.send(msg.encode(encoding="utf-8"))
-            clientSocket.close()
-            continue
-
-        # a status mark of whether the process can run based on the free resources
-        waitForRunning = False
-
-        # The processes are running
-        numIsRunning = 0
-
-        lockPIDMap.acquire()
-        for child in mapPIDtoStatus.copy():
-            if mapPIDtoStatus[child] == "running":
-                numIsRunning += 1
-        if numIsRunning >= numCores:
-            waitForRunning = True  # The process need to wait for resources
-
-        # slide windows
-        if len(responseMapWindows) >= 100:
-            responseMapWindows.pop(0)
-
-        childProcess = os.fork()
-        if childProcess != 0:
-            responseMapWindows.append([childProcess, [time.time(), -1]])
-
-        if childProcess == 0:
-            # This is the child process: run the function and exit
-            myFunction(data_, clientSocket)
-            os._exit(os.EX_OK)
-        else:
-            # Append submit time to the responseMapWindows
-            if waitForRunning:
-                # If there is no free resources (cpu core) for the process to run, then we set the childprocess to sleep.
-                mapPIDtoStatus[childProcess] = "waiting"
-                os.kill(childProcess, signal.SIGSTOP)
-
-                # Push to priority queue (using burstTime for SRTF logic)
-                burstTime = myFunction(data_, clientSocket)
-                heapq.heappush(processQueue, (burstTime, childProcess))
-            else:
-                # If there are free resources (cpu core) for the process to run, then we let the childprocess to run.
-                mapPIDtoStatus[childProcess] = "running"
-                requestQueue.append(childProcess)
-
-            lockPIDMap.release()
-            # The childprocess is running, when it is finished, let the queue find waiting childprocesses
-            threadWait = threading.Thread(
-                target=waitTermination, args=(childProcess,))
-            threadWait.start()
+    # Accept connections and handle each in a separate thread
+    while True:
+        try:
+            (clientSocket, address) = serverSocket.accept()
+            # Handle each connection in a separate thread
+            handler_thread = threading.Thread(
+                target=handle_client_connection,
+                args=(clientSocket, address)
+            )
+            handler_thread.daemon = True
+            handler_thread.start()
+        except Exception as e:
+            print(f"Error accepting connection: {e}", flush=True)
 
 
 if __name__ == "__main__":
