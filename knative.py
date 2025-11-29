@@ -69,7 +69,7 @@ TEST_SEQUENCES = {
 }
 
 # --- MODIFIED FUNCTION SIGNATURE: Added 'request_index' ---
-def lambda_func(service, service_name, request_index):
+def lambda_func(service, service_name, request_index, runner_times_list):
     global times
     t1 = time.time()
 
@@ -101,6 +101,14 @@ def lambda_func(service, service_name, request_index):
         r = requests.post(target_ip, headers=headers, json=payload)
         # safer debug output
         print(f"status={r.status_code} url={service} body={repr(r.text)}")
+
+        try:
+            response_json = r.json()
+            if "runner_turnaround_time" in response_json:
+                runner_times_list.append(response_json["runner_turnaround_time"])
+        except Exception:
+            # If parsing fails or key is missing, just continue
+            pass
     except requests.exceptions.RequestException as e:
         # network / connection error
         print(f"request error for {service}: {e}")
@@ -143,6 +151,7 @@ for load in loads:
         
         threads = []
         times = []
+        runner_times = []
         after_time, before_time = 0, 0
 
         # Get the service name from the service URL
@@ -158,7 +167,7 @@ for load in loads:
                 time.sleep(st)
 
             # Pass the request index 'i' to the lambda_func
-            threadToAdd = threading.Thread(target=lambda_func, args=(service, current_service_name, i))
+            threadToAdd = threading.Thread(target=lambda_func, args=(service, current_service_name, i, runner_times))
             threads.append(threadToAdd)
             threadToAdd.start()
             after_time = time.time()
@@ -167,12 +176,12 @@ for load in loads:
             thread.join()
 
         print("=====================" + serviceNames[services.index(service)] + f" with {load_desc[loads.index(load)]}" + "=====================", file=output_file, flush=True)
-        print(mean(times), file=output_file, flush=True)
-        print(median(times), file=output_file, flush=True)
-        print(np.percentile(times, 90), file=output_file, flush=True)
-        print(np.percentile(times, 95), file=output_file, flush=True)
-        print(np.percentile(times, 99), file=output_file, flush=True)
+        print(mean(runner_times), file=output_file, flush=True)
+        print(median(runner_times), file=output_file, flush=True)
+        print(np.percentile(runner_times, 90), file=output_file, flush=True)
+        print(np.percentile(runner_times, 95), file=output_file, flush=True)
+        print(np.percentile(runner_times, 99), file=output_file, flush=True)
 
         print(f"all times note for {load_desc[loads.index(load)]}", file=output_file, flush=True)
-        print(times, file=output_file, flush=True)
+        print(runner_times, file=output_file, flush=True)
 
