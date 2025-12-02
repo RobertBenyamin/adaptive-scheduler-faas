@@ -90,7 +90,7 @@ exit
 
 4.  **Install Neccessary Python Package**
     ```bash
-    sudo apt install python3-numpy python3-requests -y
+    sudo apt install python3-numpy python3-requests python3-pandas -y
     ```
 
 5.  **Start Evaluation**
