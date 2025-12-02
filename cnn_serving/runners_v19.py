@@ -270,7 +270,7 @@ def myFunction(data_, clientSocket_, arrival_time):
 
         # Calculate turnaround time and add it to the response
         turnaround_time = time.time() - arrival_time
-        result["runner_turnaround_time"] = turnaround_time
+        result["turnaround_time"] = turnaround_time
 
         # Send the result (Test Pid)
         result["myPID"] = os.getpid()

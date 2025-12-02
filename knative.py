@@ -104,8 +104,8 @@ def lambda_func(service, service_name, request_index, runner_times_list):
 
         try:
             response_json = r.json()
-            if "runner_turnaround_time" in response_json:
-                runner_times_list.append(response_json["runner_turnaround_time"])
+            if "turnaround_time" in response_json:
+                runner_times_list.append(response_json["turnaround_time"])
         except Exception:
             # If parsing fails or key is missing, just continue
             pass
