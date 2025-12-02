@@ -10,7 +10,7 @@ import signal
 import requests
 from threading import Thread
 from storage_helper import download_file, upload_file
-from river import ensemble
+from river import forest
 from river import drift
 from river import preprocessing
 from river import compose
@@ -35,7 +35,7 @@ class Optimized_ARF_Wrapper:
         # data input WAJIB diskalakan agar konvergen.
         self.model = compose.Pipeline(
             preprocessing.StandardScaler(),
-            ensemble.AdaptiveRandomForestRegressor(
+            forest.ARFRegressor(
                 # Perbanyak pohon untuk smooth prediction (10 -> 20)
                 n_models=20,
                 seed=42,

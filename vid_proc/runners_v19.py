@@ -8,7 +8,7 @@ import numpy as np
 import time
 import signal
 from storage_helper import download_file, upload_file
-from river import ensemble
+from river import forest
 from river import drift
 import heapq
 
@@ -27,7 +27,7 @@ class SA_RF_CDD_Wrapper:
     def __init__(self):
         # Using AdaptiveRandomForestRegressor from River
         # Implements Hoeffding Trees + ADWIN (Drift Detection) internally
-        self.model = ensemble.AdaptiveRandomForestRegressor(
+        self.model = forest.ARFRegressor(
             n_models=10,      # Number of trees (N)
             seed=42,
             # Equivalent to nmin before split (Hoeffding Bound)
