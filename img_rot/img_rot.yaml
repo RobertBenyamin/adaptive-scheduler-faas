@@ -47,4 +47,4 @@ spec:
       annotations:
         autoscaling.knative.dev/target: "10"
         autoscaling.knative.dev/max-scale: "20"
-        autoscaling.knative.dev/minScale: "4"
+        autoscaling.knative.dev/minScale: "3"
