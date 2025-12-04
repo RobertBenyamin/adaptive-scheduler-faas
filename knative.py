@@ -60,12 +60,12 @@ TEST_DATA_CONFIG = {
 # to prioritize short jobs when long jobs are also present.
 # The pattern is generally [long, long, long, short, short, long] to create a "traffic jam".
 TEST_SEQUENCES = {
-    "cnn-serving": [f"img{i}.jpg" for i in [40, 38, 39, 5, 2, 1, 40]],
-    "img-rot":     [f"img{i}.jpg" for i in [40, 38, 39, 5, 2, 1, 40]],
-    "img-res":     [f"img{i}.jpg" for i in [40, 38, 39, 5, 2, 1, 40]],
-    "vid-proc":     [f"vid{i}.mp4" for i in [10, 9, 8, 1, 2, 9]],
-    "ml-train":    [f"dataset{i}.csv" for i in [5, 4, 3, 1, 2, 4]],
-    "web-serve":   [f"account{i}.txt" for i in [10, 9, 8, 2, 1, 3, 10]],
+    "cnn-serving": [f"img{i}.jpg" for i in [40, 38, 3, 2, 1, 30, 20]],
+    "img-rot":     [f"img{i}.jpg" for i in [40, 38, 3, 2, 1, 30, 20]],
+    "img-res":     [f"img{i}.jpg" for i in [40, 38, 3, 2, 1, 30, 20]],
+    "vid-proc":     [f"vid{i}.mp4" for i in [10, 9, 2, 1, 7, 6]],
+    "ml-train":    [f"dataset{i}.csv" for i in [5, 1, 2, 3, 4]],
+    "web-serve":   [f"account{i}.txt" for i in [10, 9, 2, 1, 7, 6]],
 }
 
 def reset_server_state(service):
