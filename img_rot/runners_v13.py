@@ -735,6 +735,16 @@ def handle_client_connection(clientSocket, address):
                 responseFlag = True
             elif "Clear" in message:
                 responseMapWindows = []
+                # Reset execution history for round separation
+                processExecutionHistory[FUNCTION_HISTORY_KEY] = []
+                # Clear burst time cache to force recalculation
+                with _burst_time_cache['lock']:
+                    _burst_time_cache['prediction'] = None
+                    _burst_time_cache['history_size'] = 0
+                    _burst_time_cache['timestamp'] = 0
+                result = {"Response": "History Reset"}
+                msg = json.dumps(result)
+                responseFlag = True
 
         if responseFlag:
             response_headers = {
