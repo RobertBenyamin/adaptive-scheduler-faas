@@ -58,48 +58,48 @@ TEST_DATA_CONFIG = {
 # A dictionary of deliberate, non-random request patterns.
 # This creates a challenging scenario to test the scheduler's ability
 # to prioritize short jobs when long jobs are also present.
-# Extended sequences (30-40 items) to reduce cycling frequency at HIGH load (~120 requests)
-# Pattern: mix of long, medium, and short jobs with gradual transitions
+#
+# Design based on load levels:
+# - LOW:  10 req/s × 2s = ~20 requests  → cycles ~2x through sequence
+# - MED:  30 req/s × 2s = ~60 requests  → cycles ~6x through sequence
+# - HIGH: 60 req/s × 2s = ~120 requests → cycles ~12x through sequence
+#
+# Strategy: ~10 items with STABLE REGIONS (repeated values) so v19 can learn
+# Pattern: long-long-long → short-short-short → medium (gives model time to adapt)
 TEST_SEQUENCES = {
+    # Images 1-10: small, 11-25: medium, 26-40: large
     "cnn-serving": [f"img{i}.jpg" for i in [
-        40, 39, 38, 5, 4, 3, 2, 1,           # long → short burst
-        35, 34, 33, 16, 15, 14,              # medium-long → medium-short
-        30, 29, 28, 27, 15, 14, 13, 12,      # gradual decrease
-        25, 24, 6, 7, 30, 31, 32, 33,        # mixed pattern
-        37, 36, 11, 16, 17, 18, 19, 33       # another mixed pattern
+        40, 40, 36,      # 3x large (stable region)
+        3, 2, 1,         # 3x small (stable region)  
+        30, 20, 15       # transition through medium
     ]],
     "img-rot": [f"img{i}.jpg" for i in [
-        40, 39, 38, 5, 4, 3, 2, 1,
-        35, 34, 33, 16, 15, 14,
-        30, 29, 28, 27, 15, 14, 13, 12,
-        25, 24, 6, 7, 30, 31, 32, 33,
-        37, 36, 11, 16, 17, 18, 19, 33
+        40, 40, 36,      # 3x large
+        3, 2, 1,         # 3x small
+        30, 20, 15       # medium transition
     ]],
     "img-res": [f"img{i}.jpg" for i in [
-        40, 39, 38, 5, 4, 3, 2, 1,
-        35, 34, 33, 16, 15, 14,
-        30, 29, 28, 27, 15, 14, 13, 12,
-        25, 24, 6, 7, 30, 31, 32, 33,
-        37, 36, 11, 16, 17, 18, 19, 33
+        40, 40, 36,      # 3x large
+        3, 2, 1,         # 3x small
+        30, 20, 15       # medium transition
     ]],
+    # Videos 1-3: small, 4-7: medium, 8-10: large
     "vid-proc": [f"vid{i}.mp4" for i in [
-        10, 9, 8, 2, 1, 3,                   # long → short
-        7, 6, 5, 4,                          # medium descending
-        10, 1, 9, 2, 8, 3, 7, 4, 6, 5,       # alternating long-short
-        9, 8, 7, 1, 2, 3, 10, 6, 5, 4        # another pattern
+        10, 9, 8,        # 3x large
+        2, 1, 3,         # 3x small
+        7, 6, 5          # medium
     ]],
+    # Datasets 1-3: small, 4-7: medium, 8-10: large
     "ml-train": [f"dataset{i}.csv" for i in [
-        10, 9, 8, 2, 1, 3,                   # high → low
-        10, 8, 6, 4, 2,                      # full descending
-        1, 3, 5, 7, 9,                       # full ascending
-        10, 5, 1, 8, 3, 9, 2,                # mixed high-med-low
-        8, 9, 10, 1, 2, 3                    # another pattern
+        10, 9, 8,        # 3x large
+        1, 2, 3,         # 3x small
+        5, 6, 7          # medium
     ]],
+    # Accounts 1-3: small, 4-7: medium, 8-10: large
     "web-serve": [f"account{i}.txt" for i in [
-        10, 9, 8, 2, 1, 3,                   # long → short
-        7, 6, 5, 4,                          # medium descending
-        10, 1, 9, 2, 8, 3, 7, 4, 6, 5,       # alternating
-        9, 8, 7, 1, 2, 3, 10, 6, 5, 4        # another pattern
+        10, 9, 8,        # 3x large
+        2, 1, 3,         # 3x small
+        7, 6, 5          # medium
     ]],
 }
 
