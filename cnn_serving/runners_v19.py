@@ -22,50 +22,84 @@ def signal_handler(sig, frame):
     serverSocket_.close()
     sys.exit(0)
 
-# 19v1
+# 19v2 - Improved version with hybrid fallback and better cold start handling
 class SA_RF_CDD_Wrapper:
     def __init__(self):
         # Using AdaptiveRandomForestRegressor from River (river 0.14.0 API)
         # Implements Hoeffding Trees + ADWIN (Drift Detection) internally
         self.model = ensemble.AdaptiveRandomForestRegressor(
-            n_models=10,      # Number of trees (N)
+            n_models=15,      # Increased from 10 for better ensemble stability
             seed=42,
-            # Equivalent to nmin before split (Hoeffding Bound)
-            grace_period=50,
-            drift_detector=drift.ADWIN(delta=0.002)  # Concept Drift Detector
+            # Reduced from 50 for faster adaptation in FaaS environment
+            grace_period=10,
+            # Less sensitive drift detector (was 0.002)
+            drift_detector=drift.ADWIN(delta=0.01)
         )
         self.last_arrival_time = 0
+        self.samples_learned = 0  # Track number of samples learned
+        
+        # EWMA state for hybrid prediction
+        self.ewma_value = None
+        self.ewma_alpha = 0.3  # Smoothing factor for EWMA
+        
+        # Minimum samples before trusting the model
+        self.MIN_SAMPLES_FOR_MODEL = 5
+        # Blend ratio: how much to trust model vs EWMA (0 = full EWMA, 1 = full model)
+        self.MODEL_TRUST_THRESHOLD = 20  # Full trust after this many samples
+
+    def _update_ewma(self, actual_duration):
+        """Update EWMA with new observation"""
+        if self.ewma_value is None:
+            self.ewma_value = actual_duration
+        else:
+            self.ewma_value = self.ewma_alpha * actual_duration + (1 - self.ewma_alpha) * self.ewma_value
+
+    def _get_fallback_prediction(self, history):
+        """Get robust fallback prediction using EWMA or mean"""
+        if self.ewma_value is not None:
+            return self.ewma_value
+        elif history:
+            return np.mean(history[-10:]) if len(history) >= 10 else np.mean(history)
+        else:
+            return 2.0  # Default for cold start
 
     def extract_features(self, history, current_arrival_time, last_arrival):
         """
         Transform raw history into features
         Features: Lags, Window Stats, Volatility, Delta, Inter-Arrival
+        Now handles cold start more gracefully with available data
         """
-        if len(history) < 10:
-            # Cold start handling: return default safe features
+        n = len(history)
+        
+        # Use available data even if less than 10
+        if n == 0:
             return {
                 "lag_1": 0, "lag_2": 0, "lag_3": 0,
                 "mean_5": 0, "std_10": 0,
                 "delta_1_2": 0,
-                "inter_arrival": 0
+                "inter_arrival": 0,
+                "history_size": 0
             }
+        
+        # 1. Lag Features (use 0 if not available)
+        lag_1 = history[-1] if n >= 1 else 0
+        lag_2 = history[-2] if n >= 2 else lag_1
+        lag_3 = history[-3] if n >= 3 else lag_2
 
-        # 1. Lag Features (Autocorrelation)
-        lag_1 = history[-1]
-        lag_2 = history[-2]
-        lag_3 = history[-3]
+        # 2. Window Statistics (use available data)
+        window_5 = history[-5:] if n >= 5 else history
+        mean_5 = np.mean(window_5)
 
-        # 2. Window Statistics (Short-term Trend)
-        mean_5 = np.mean(history[-5:])
+        # 3. Volatility Measures (use available data, min 2 for std)
+        window_10 = history[-10:] if n >= 10 else history
+        std_10 = np.std(window_10) if len(window_10) >= 2 else 0
 
-        # 3. Volatility Measures (Variability)
-        std_10 = np.std(history[-10:])
-
-        # 4. Delta Features (Acceleration)
+        # 4. Delta Features
         delta_1_2 = lag_1 - lag_2
 
-        # 5. Inter-Arrival Time (Contention Indicator)
+        # 5. Inter-Arrival Time (capped to prevent outliers)
         inter_arrival = current_arrival_time - last_arrival if last_arrival > 0 else 0
+        inter_arrival = min(inter_arrival, 10.0)  # Cap at 10 seconds
 
         return {
             "lag_1": lag_1,
@@ -74,27 +108,59 @@ class SA_RF_CDD_Wrapper:
             "mean_5": mean_5,
             "std_10": std_10,
             "delta_1_2": delta_1_2,
-            "inter_arrival": inter_arrival
+            "inter_arrival": inter_arrival,
+            "history_size": min(n, 100)  # Helps model know confidence level
         }
 
     def predict(self, history):
         """
-        Predict burst time using stream-based model (very fast, O(depth))
+        Hybrid prediction: blends model prediction with EWMA fallback
+        based on confidence (number of samples learned)
         """
+        # Get fallback prediction first (always available)
+        fallback = self._get_fallback_prediction(history)
+        
+        # If not enough samples, use fallback entirely
+        if self.samples_learned < self.MIN_SAMPLES_FOR_MODEL:
+            return fallback
+        
+        # Get model prediction
         features = self.extract_features(
             history, time.time(), self.last_arrival_time)
-        prediction = self.model.predict_one(features)
-        # Return default if model hasn't learned yet
-        return prediction if prediction is not None else 2.0
+        model_pred = self.model.predict_one(features)
+        
+        # If model returns None, use fallback
+        if model_pred is None:
+            return fallback
+        
+        # Calculate blend ratio based on samples learned
+        # Linear interpolation from 0 to 1 as samples increase
+        blend_ratio = min(1.0, (self.samples_learned - self.MIN_SAMPLES_FOR_MODEL) / 
+                         (self.MODEL_TRUST_THRESHOLD - self.MIN_SAMPLES_FOR_MODEL))
+        
+        # Blend model prediction with fallback
+        blended = blend_ratio * model_pred + (1 - blend_ratio) * fallback
+        
+        # Sanity check: prediction should be positive and reasonable
+        blended = max(0.1, min(blended, 60.0))  # Between 0.1s and 60s
+        
+        return blended
 
     def learn(self, history, arrival_time, actual_duration):
         """
-        Update model incrementally (O(1))
+        Update model incrementally (O(1)) and update EWMA
         """
+        # Update EWMA (always, for fallback)
+        self._update_ewma(actual_duration)
+        
+        # Extract features and learn
         features = self.extract_features(
             history, arrival_time, self.last_arrival_time)
         self.model.learn_one(features, actual_duration)
+        
+        # Update tracking
         self.last_arrival_time = arrival_time
+        self.samples_learned += 1
 
 
 class PrintHook:

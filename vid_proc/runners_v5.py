@@ -8,8 +8,6 @@ import numpy as np
 import time
 import signal
 from storage_helper import download_file, upload_file
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
 import heapq
 
 current_path = "/app/pythonAction"
@@ -231,40 +229,6 @@ def myFunction(data_, clientSocket_, arrival_time):
     except:
         clientSocket_.close()
     clientSocket_.close()
-
-
-# Fungsi EWMA (Exponential Weighted Moving Average)
-def calculate_ewma(history, alpha=0.8):
-    if not history:
-        return 0  # Jika tidak ada data, kembalikan 0
-    ewma = history[0]  # Nilai awal
-    for val in history[1:]:
-        ewma = alpha * val + (1 - alpha) * ewma
-    return ewma
-
-# Placeholder Model Training (Random Forest & Linear Regression)
-
-
-def train_models(history):
-    if len(history) < 5:  # Butuh minimal 5 data untuk regresi
-        return np.mean(history), np.mean(history)
-
-    X = np.array(range(len(history))).reshape(-1, 1)
-    y = np.array(history)
-
-    # Model Linear Regression
-    lin_model = LinearRegression()
-    lin_model.fit(X, y)
-    lin_pred = lin_model.predict([[len(history)]])[
-        0]  # Prediksi waktu berikutnya
-
-    # Model Random Forest
-    rf_model = RandomForestRegressor(n_estimators=10, random_state=42)
-    rf_model.fit(X, y)
-    rf_pred = rf_model.predict([[len(history)]])[
-        0]  # Prediksi waktu berikutnya
-
-    return lin_pred, rf_pred
 
 
 # Parameter Mitigasi Ketidakpastian
