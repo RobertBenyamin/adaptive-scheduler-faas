@@ -50,7 +50,7 @@ TEST_DATA_CONFIG = {
     "img-rot":     [f"img{i}.jpg" for i in range(1, 41)],
     "img-res":     [f"img{i}.jpg" for i in range(1, 41)],
     "vid-proc":    [f"vid{i}.mp4" for i in range(1, 11)],
-    "ml-train":    [f"dataset{i}.csv" for i in range(1, 6)],
+    "ml-train":    [f"dataset{i}.csv" for i in range(1, 11)],
     "web-serve":   [f"account{i}.txt" for i in range(1, 11)],
 }
 
@@ -58,14 +58,49 @@ TEST_DATA_CONFIG = {
 # A dictionary of deliberate, non-random request patterns.
 # This creates a challenging scenario to test the scheduler's ability
 # to prioritize short jobs when long jobs are also present.
-# The pattern is generally [long, long, long, short, short, long] to create a "traffic jam".
+# Extended sequences (30-40 items) to reduce cycling frequency at HIGH load (~120 requests)
+# Pattern: mix of long, medium, and short jobs with gradual transitions
 TEST_SEQUENCES = {
-    "cnn-serving": [f"img{i}.jpg" for i in [40, 38, 3, 2, 1, 30, 20]],
-    "img-rot":     [f"img{i}.jpg" for i in [40, 38, 3, 2, 1, 30, 20]],
-    "img-res":     [f"img{i}.jpg" for i in [40, 38, 3, 2, 1, 30, 20]],
-    "vid-proc":     [f"vid{i}.mp4" for i in [10, 9, 2, 1, 7, 6]],
-    "ml-train":    [f"dataset{i}.csv" for i in [5, 1, 2, 3, 4]],
-    "web-serve":   [f"account{i}.txt" for i in [10, 9, 2, 1, 7, 6]],
+    "cnn-serving": [f"img{i}.jpg" for i in [
+        40, 39, 38, 5, 4, 3, 2, 1,           # long → short burst
+        35, 34, 33, 16, 15, 14,              # medium-long → medium-short
+        30, 29, 28, 27, 15, 14, 13, 12,      # gradual decrease
+        25, 24, 6, 7, 30, 31, 32, 33,        # mixed pattern
+        37, 36, 11, 16, 17, 18, 19, 33       # another mixed pattern
+    ]],
+    "img-rot": [f"img{i}.jpg" for i in [
+        40, 39, 38, 5, 4, 3, 2, 1,
+        35, 34, 33, 16, 15, 14,
+        30, 29, 28, 27, 15, 14, 13, 12,
+        25, 24, 6, 7, 30, 31, 32, 33,
+        37, 36, 11, 16, 17, 18, 19, 33
+    ]],
+    "img-res": [f"img{i}.jpg" for i in [
+        40, 39, 38, 5, 4, 3, 2, 1,
+        35, 34, 33, 16, 15, 14,
+        30, 29, 28, 27, 15, 14, 13, 12,
+        25, 24, 6, 7, 30, 31, 32, 33,
+        37, 36, 11, 16, 17, 18, 19, 33
+    ]],
+    "vid-proc": [f"vid{i}.mp4" for i in [
+        10, 9, 8, 2, 1, 3,                   # long → short
+        7, 6, 5, 4,                          # medium descending
+        10, 1, 9, 2, 8, 3, 7, 4, 6, 5,       # alternating long-short
+        9, 8, 7, 1, 2, 3, 10, 6, 5, 4        # another pattern
+    ]],
+    "ml-train": [f"dataset{i}.csv" for i in [
+        10, 9, 8, 2, 1, 3,                   # high → low
+        10, 8, 6, 4, 2,                      # full descending
+        1, 3, 5, 7, 9,                       # full ascending
+        10, 5, 1, 8, 3, 9, 2,                # mixed high-med-low
+        8, 9, 10, 1, 2, 3                    # another pattern
+    ]],
+    "web-serve": [f"account{i}.txt" for i in [
+        10, 9, 8, 2, 1, 3,                   # long → short
+        7, 6, 5, 4,                          # medium descending
+        10, 1, 9, 2, 8, 3, 7, 4, 6, 5,       # alternating
+        9, 8, 7, 1, 2, 3, 10, 6, 5, 4        # another pattern
+    ]],
 }
 
 def reset_server_state(service):
