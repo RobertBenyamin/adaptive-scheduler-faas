@@ -68,6 +68,22 @@ TEST_SEQUENCES = {
     "web-serve":   [f"account{i}.txt" for i in [10, 9, 8, 2, 1, 3, 10]],
 }
 
+def reset_server_state(service):
+    """
+    Send a Clear signal to the server to reset its state before each test round.
+    This ensures that execution history and burst time predictions don't carry over between rounds.
+    """
+    headers = {
+        "Host": service.replace("http://", ""),
+        "Content-Type": "application/json"
+    }
+    payload = {"Clear": True}
+    try:
+        r = requests.post(target_ip, headers=headers, json=payload, timeout=5)
+        print(f"Reset server state for {service}: status={r.status_code}")
+    except requests.exceptions.RequestException as e:
+        print(f"Warning: Could not reset server state for {service}: {e}")
+
 # --- MODIFIED FUNCTION SIGNATURE: Added 'request_index' ---
 def lambda_func(service, service_name, request_index, runner_times_list):
     global times
@@ -156,6 +172,9 @@ for load in loads:
 
         # Get the service name from the service URL
         current_service_name = serviceNames[services.index(service)]
+
+        # Reset server state before each test round to separate metrics between rounds
+        reset_server_state(service)
 
         st = 0
         # --- MODIFIED REQUEST GENERATION LOOP ---
