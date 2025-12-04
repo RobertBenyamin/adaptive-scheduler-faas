@@ -809,6 +809,15 @@ def handle_client_connection(clientSocket, address):
                 responseFlag = True
             elif "Clear" in message:
                 responseMapWindows = []
+                # Reset execution history for round separation
+                processExecutionHistory[FUNCTION_HISTORY_KEY] = []
+                # Reset SA-RF-CDD model to fresh state
+                with model_lock:
+                    global sa_rf_cdd_model
+                    sa_rf_cdd_model = SA_RF_CDD_Wrapper()
+                result = {"Response": "History Reset"}
+                msg = json.dumps(result)
+                responseFlag = True
 
         if responseFlag:
             response_headers = {
