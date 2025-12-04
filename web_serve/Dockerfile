@@ -3,7 +3,7 @@ FROM jovanvr97/web_serve_start
 WORKDIR /app/pythonAction
 
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis Flask numpy jsonpickle boto3 river==0.23.0 pytest
+RUN pip install --no-cache-dir sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis Flask numpy jsonpickle boto3 river==0.19.0 pytest
 # RUN pip install tensorflow
 
 ARG RUNNER_FILE=runner.py
