@@ -81,9 +81,9 @@ TEST_SEQUENCES = {
         5, 6, 7
     ]],
     "ml-train": [f"dataset{i}.csv" for i in [
-        5, 5,
-        1, 2, 2,
-        3, 4, 4
+        10, 9,
+        1, 2, 3,
+        5, 6, 7
     ]],
     "web-serve": [f"account{i}.txt" for i in [
         10, 9,
