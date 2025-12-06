@@ -61,64 +61,34 @@ TEST_DATA_CONFIG = {
 # - Total 18 items to avoid too much repetition
 TEST_SEQUENCES = {
     "cnn-serving": [f"img{i}.jpg" for i in [
-        42, 41, 40,      # 3x large (create backlog)
-        2, 1, 3,         # 3x small (test SRTF prioritization)
-        25, 28,          # 2x medium
-        40, 39,          # 2x large again
-        4, 5, 6,         # 3x small again
-        20, 22,          # 2x medium
-        38,              # 1x large
-        7, 8, 9, 10      # 4x small (test recovery)
+        41, 40,
+        2, 1, 3,
+        20, 25, 28,
     ]],
     "img-rot": [f"img{i}.jpg" for i in [
-        42, 41, 40,
+        41, 40,
         2, 1, 3,
-        25, 28,
-        40, 39,
-        4, 5, 6,
-        20, 22,
-        38,
-        7, 8, 9, 10
+        20, 25, 28,
     ]],
     "img-res": [f"img{i}.jpg" for i in [
-        42, 41, 40,
+        41, 40,
         2, 1, 3,
-        25, 28,
-        40, 39,
-        4, 5, 6,
-        20, 22,
-        38,
-        7, 8, 9, 10
+        20, 25, 28,
     ]],
     "vid-proc": [f"vid{i}.mp4" for i in [
-        10, 9, 9,        # large
-        1, 2,            # small
-        7, 8,            # medium
-        9, 10,           # large
-        3, 1, 2,         # small
-        8, 7,            # medium
-        10,              # large
-        4, 3, 2, 1       # small burst
+        10, 9,
+        1, 2, 3,
+        5, 6, 7
     ]],
     "ml-train": [f"dataset{i}.csv" for i in [
-        10, 9, 8,
-        1, 2,
-        6, 7,
-        9, 10,
-        3, 1, 2,
-        5, 6,
-        8,
-        4, 3, 2, 1
+        10, 9,
+        1, 2, 3,
+        5, 6, 7
     ]],
     "web-serve": [f"account{i}.txt" for i in [
-        10, 9, 8,
-        1, 2,
-        6, 7,
-        9, 10,
-        3, 1, 2,
-        5, 6,
-        8,
-        4, 3, 2, 1
+        10, 9,
+        1, 2, 3,
+        5, 6, 7
     ]],
 }
 
