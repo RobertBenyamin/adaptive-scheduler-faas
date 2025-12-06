@@ -6,7 +6,7 @@ metadata:
 spec:
   template:
     spec:
-      containerConcurrency: 50
+      containerConcurrency: 20
       containers:
         - image: kind.local/server-vid-proc:1.1.0
           imagePullPolicy: IfNotPresent
