@@ -6,7 +6,7 @@ metadata:
 spec:
   template:
     spec:
-      containerConcurrency: 20
+      containerConcurrency: 100
       containers:
         - image: kind.local/server-img-res:1.1.0
           imagePullPolicy: IfNotPresent
@@ -47,4 +47,4 @@ spec:
       annotations:
         autoscaling.knative.dev/target: "10"
         autoscaling.knative.dev/max-scale: "20"
-        autoscaling.knative.dev/minScale: "5"
+        autoscaling.knative.dev/minScale: "4"
