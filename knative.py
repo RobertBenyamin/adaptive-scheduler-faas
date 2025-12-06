@@ -195,7 +195,7 @@ def warmup_phase(service, service_name, num_warmup=25):
     
     for i in range(num_warmup):
         lambda_func(service, service_name, i, warmup_times)
-        time.sleep(0.15)  # small delay between warmup requests
+        time.sleep(0.2)  # small delay between warmup requests
     
     print(f"Warmup complete for {service_name}. History built with {len(warmup_times)} requests.")
 
@@ -218,7 +218,7 @@ output_file = open("run-all-out.txt", "w")
 
 indR = 0
 for load in loads:
-    duration = 5  # Changed from 2 to 5 seconds
+    duration = 2  # Changed from 2 to 5 seconds
     seed = 100
     rate = load
     # generate Poisson's distribution of events
