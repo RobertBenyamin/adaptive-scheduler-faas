@@ -61,30 +61,30 @@ TEST_DATA_CONFIG = {
 # - Total 18 items to avoid too much repetition
 TEST_SEQUENCES = {
     "cnn-serving": [f"img{i}.jpg" for i in [
-        45, 44, 43,      # 3x large (create backlog)
+        42, 41, 40,      # 3x large (create backlog)
         2, 1, 3,         # 3x small (test SRTF prioritization)
         25, 28,          # 2x medium
-        42, 41,          # 2x large again
+        40, 39,          # 2x large again
         4, 5, 6,         # 3x small again
         20, 22,          # 2x medium
         38,              # 1x large
         7, 8, 9, 10      # 4x small (test recovery)
     ]],
     "img-rot": [f"img{i}.jpg" for i in [
-        45, 44, 43,
+        42, 41, 40,
         2, 1, 3,
         25, 28,
-        42, 41,
+        40, 39,
         4, 5, 6,
         20, 22,
         38,
         7, 8, 9, 10
     ]],
     "img-res": [f"img{i}.jpg" for i in [
-        45, 44, 43,
+        42, 41, 40,
         2, 1, 3,
         25, 28,
-        42, 41,
+        40, 39,
         4, 5, 6,
         20, 22,
         38,
