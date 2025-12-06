@@ -5,8 +5,7 @@ import time
 import numpy as np
 import threading
 import requests
-from statistics import mean, median, variance, stdev
-
+from statistics import mean, median
 
 # IP address of the ingress (could be LoadBalancer, NodePort, etc.)
 # use this command to get IP -> sudo kubectl get svc -n kourier-system kourier -o wide
@@ -54,52 +53,72 @@ TEST_DATA_CONFIG = {
     "web-serve":   [f"account{i}.txt" for i in range(1, 11)],
 }
 
-# --- NEW: Deliberate Test Sequences ---
-# A dictionary of deliberate, non-random request patterns.
-# This creates a challenging scenario to test the scheduler's ability
-# to prioritize short jobs when long jobs are also present.
-#
-# Design based on load levels:
-# - LOW:  10 req/s × 2s = ~20 requests  → cycles ~2x through sequence
-# - MED:  30 req/s × 2s = ~60 requests  → cycles ~6x through sequence
-# - HIGH: 60 req/s × 2s = ~120 requests → cycles ~12x through sequence
-#
-# Strategy: ~10 items with STABLE REGIONS (repeated values) so v19 can learn
-# Pattern: long-long-long → short-short-short → medium (gives model time to adapt)
+# --- IMPROVED: More varied and unpredictable test sequences ---
+# Pattern designed to challenge SRTF scheduling:
+# - Create backlogs with large jobs
+# - Test prioritization with bursts of small jobs
+# - Mix medium jobs to add unpredictability
+# - Total 18 items to avoid too much repetition
 TEST_SEQUENCES = {
-    # Images 1-10: small, 11-25: medium, 26-40: large
     "cnn-serving": [f"img{i}.jpg" for i in [
-        40, 40, 36,      # 3x large (stable region)
-        3, 2, 1,         # 3x small (stable region)  
-        30, 20, 15       # transition through medium
+        45, 44, 43,      # 3x large (create backlog)
+        2, 1, 3,         # 3x small (test SRTF prioritization)
+        25, 28,          # 2x medium
+        42, 41,          # 2x large again
+        4, 5, 6,         # 3x small again
+        20, 22,          # 2x medium
+        38,              # 1x large
+        7, 8, 9, 10      # 4x small (test recovery)
     ]],
     "img-rot": [f"img{i}.jpg" for i in [
-        40, 40, 36,      # 3x large
-        3, 2, 1,         # 3x small
-        30, 20, 15       # medium transition
+        45, 44, 43,
+        2, 1, 3,
+        25, 28,
+        42, 41,
+        4, 5, 6,
+        20, 22,
+        38,
+        7, 8, 9, 10
     ]],
     "img-res": [f"img{i}.jpg" for i in [
-        40, 40, 36,      # 3x large
-        3, 2, 1,         # 3x small
-        30, 20, 15       # medium transition
+        45, 44, 43,
+        2, 1, 3,
+        25, 28,
+        42, 41,
+        4, 5, 6,
+        20, 22,
+        38,
+        7, 8, 9, 10
     ]],
-    # Videos 1-3: small, 4-7: medium, 8-10: large
     "vid-proc": [f"vid{i}.mp4" for i in [
-        10, 9, 8,        # 3x large
-        2, 1, 3,         # 3x small
-        7, 6, 5          # medium
+        10, 9, 9,        # large
+        1, 2,            # small
+        7, 8,            # medium
+        9, 10,           # large
+        3, 1, 2,         # small
+        8, 7,            # medium
+        10,              # large
+        4, 3, 2, 1       # small burst
     ]],
-    # Datasets 1-3: small, 4-7: medium, 8-10: large
     "ml-train": [f"dataset{i}.csv" for i in [
-        10, 9, 8,        # 3x large
-        1, 2, 3,         # 3x small
-        5, 6, 7          # medium
+        10, 9, 8,
+        1, 2,
+        6, 7,
+        9, 10,
+        3, 1, 2,
+        5, 6,
+        8,
+        4, 3, 2, 1
     ]],
-    # Accounts 1-3: small, 4-7: medium, 8-10: large
     "web-serve": [f"account{i}.txt" for i in [
-        10, 9, 8,        # 3x large
-        2, 1, 3,         # 3x small
-        7, 6, 5          # medium
+        10, 9, 8,
+        1, 2,
+        6, 7,
+        9, 10,
+        3, 1, 2,
+        5, 6,
+        8,
+        4, 3, 2, 1
     ]],
 }
 
@@ -119,7 +138,6 @@ def reset_server_state(service):
     except requests.exceptions.RequestException as e:
         print(f"Warning: Could not reset server state for {service}: {e}")
 
-# --- MODIFIED FUNCTION SIGNATURE: Added 'request_index' ---
 def lambda_func(service, service_name, request_index, runner_times_list):
     global times
     t1 = time.time()
@@ -130,9 +148,8 @@ def lambda_func(service, service_name, request_index, runner_times_list):
         "Content-Type": "application/json"
     }
 
-    # --- MODIFIED PAYLOAD CREATION ---
     payload = {}
-    # Use the deliberate test sequence if available for the service
+
     if service_name in TEST_SEQUENCES:
         sequence = TEST_SEQUENCES[service_name]
         # Cycle through the sequence if the number of requests exceeds its length
@@ -168,6 +185,20 @@ def lambda_func(service, service_name, request_index, runner_times_list):
     t2 = time.time()
     times.append(t2 - t1)
 
+def warmup_phase(service, service_name, num_warmup=25):
+    """
+    Send initial requests to build history for prediction models.
+    This ensures both the mean-based and your proposed method have sufficient data.
+    """
+    print(f"Starting warmup phase for {service_name} with {num_warmup} requests...")
+    warmup_times = []
+    
+    for i in range(num_warmup):
+        lambda_func(service, service_name, i, warmup_times)
+        time.sleep(0.15)  # small delay between warmup requests
+    
+    print(f"Warmup complete for {service_name}. History built with {len(warmup_times)} requests.")
+
 def EnforceActivityWindow(start_time, end_time, instance_events):
     events_iit = []
     events_abs = [0] + instance_events
@@ -180,14 +211,14 @@ def EnforceActivityWindow(start_time, end_time, instance_events):
         pass
     return events_iit
 
-loads = [10, 30, 60] # Changed from [5, 20, 50]
+loads = [10, 30, 60]
 load_desc = ["LOW_LOAD", "MED_LOAD", "HIGH_LOAD"]
 
 output_file = open("run-all-out.txt", "w")
 
 indR = 0
 for load in loads:
-    duration = 2
+    duration = 5  # Changed from 2 to 5 seconds
     seed = 100
     rate = load
     # generate Poisson's distribution of events
@@ -210,9 +241,12 @@ for load in loads:
 
         # Reset server state before each test round to separate metrics between rounds
         reset_server_state(service)
+        
+        # Warmup phase: build initial history for prediction models
+        warmup_phase(service, current_service_name, num_warmup=15)
 
         st = 0
-        # --- MODIFIED REQUEST GENERATION LOOP ---
+  
         # Use enumerate to get the index of each request
         for i, t in enumerate(instance_events):
             st = st + t - (after_time - before_time)
@@ -238,4 +272,3 @@ for load in loads:
 
         print(f"all times note for {load_desc[loads.index(load)]}", file=output_file, flush=True)
         print(runner_times, file=output_file, flush=True)
-
