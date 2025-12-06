@@ -11,7 +11,7 @@ s3_client = boto3.client(
 )
 
 # Nama bucket dan nama file
-bucket_name = 'faas-scheduler-data-1'
+bucket_name = 'faas-scheduler-data-ph'
 object_key = 'img10.jpg'
 local_filename = 'img10.png'
 
