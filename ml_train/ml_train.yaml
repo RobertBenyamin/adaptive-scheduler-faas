@@ -6,7 +6,7 @@ metadata:
 spec:
   template:
     spec:
-      containerConcurrency: 100
+      containerConcurrency: 50
       containers:
         - image: kind.local/server-ml-train:1.1.0
           imagePullPolicy: IfNotPresent
