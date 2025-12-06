@@ -243,7 +243,7 @@ for load in loads:
         reset_server_state(service)
         
         # Warmup phase: build initial history for prediction models
-        warmup_phase(service, current_service_name, num_warmup=15)
+        warmup_phase(service, current_service_name, num_warmup=5)
 
         st = 0
   
