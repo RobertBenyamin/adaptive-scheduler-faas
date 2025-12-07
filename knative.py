@@ -192,7 +192,7 @@ def categorize_job_size(input_file, service_name):
             file_num = int(input_file.replace('img', '').replace('.jpg', ''))
             if file_num <= 15:
                 return 'short'
-            elif file_num <= 40:
+            elif file_num <= 30:
                 return 'medium'
             else:
                 return 'long'
