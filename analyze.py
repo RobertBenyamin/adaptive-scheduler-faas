@@ -46,12 +46,14 @@ def parse_performance_data(text_data):
                     'p90': None,
                     'p95': None,
                     'p99': None,
-                    'all_times': []
+                    'all_times': [],
+                    'breakdown': {}
                 }
                 
                 # Parse the data section
                 numeric_values = []
                 all_times_values = []
+                current_breakdown_key = None
                 
                 for line in lines:
                     line = line.strip()
@@ -68,11 +70,18 @@ def parse_performance_data(text_data):
                     # Skip the "all times note" line
                     elif 'all times note' in line:
                         continue
+                    # Check for breakdown keys
+                    elif line.startswith('BREAKDOWN_'):
+                        current_breakdown_key = line
                     else:
                         # Try to parse as numeric value
                         try:
                             value = float(line)
-                            numeric_values.append(value)
+                            if current_breakdown_key:
+                                stats['breakdown'][current_breakdown_key] = value
+                                current_breakdown_key = None
+                            else:
+                                numeric_values.append(value)
                         except ValueError:
                             continue
                 
@@ -89,7 +98,7 @@ def parse_performance_data(text_data):
                 
                 # Store the parsed data if we have any useful information
                 if (any(stats[key] is not None for key in ['mean', 'median', 'p90', 'p95', 'p99']) 
-                    or stats['all_times']):
+                    or stats['all_times'] or stats['breakdown']):
                     parsed_data.append(stats)
                 
                 # Skip the data section since we just processed it
@@ -124,7 +133,7 @@ def create_summary_dataframe(parsed_data):
                 'Std_Dev': np.std(all_times)
             }
         
-        summary_rows.append({
+        row = {
             'Service': service,
             'Load_Type': load_type,
             'Reported_Mean': entry['mean'],
@@ -133,7 +142,13 @@ def create_summary_dataframe(parsed_data):
             'Reported_P95': entry['p95'],
             'Reported_P99': entry['p99'],
             **additional_stats
-        })
+        }
+
+        # Add breakdown stats if present
+        if 'breakdown' in entry:
+            row.update(entry['breakdown'])
+            
+        summary_rows.append(row)
     
     return pd.DataFrame(summary_rows)
 

@@ -108,7 +108,7 @@ def reset_server_state(service):
     except requests.exceptions.RequestException as e:
         print(f"Warning: Could not reset server state for {service}: {e}")
 
-def lambda_func(service, service_name, request_index, runner_times_list):
+def lambda_func(service, service_name, request_index, runner_times_list, job_details_list):
     global times
     t1 = time.time()
 
@@ -119,6 +119,7 @@ def lambda_func(service, service_name, request_index, runner_times_list):
     }
 
     payload = {}
+    input_file = None
 
     if service_name in TEST_SEQUENCES:
         sequence = TEST_SEQUENCES[service_name]
@@ -143,7 +144,13 @@ def lambda_func(service, service_name, request_index, runner_times_list):
         try:
             response_json = r.json()
             if "turnaround_time" in response_json:
-                runner_times_list.append(response_json["turnaround_time"])
+                turnaround_time = response_json["turnaround_time"]
+                runner_times_list.append(turnaround_time)
+                # Store job details for breakdown analysis
+                job_details_list.append({
+                    'input_file': input_file,
+                    'turnaround_time': turnaround_time
+                })
         except Exception:
             # If parsing fails or key is missing, just continue
             pass
@@ -162,12 +169,110 @@ def warmup_phase(service, service_name, num_warmup=25):
     """
     print(f"Starting warmup phase for {service_name} with {num_warmup} requests...")
     warmup_times = []
+    warmup_details = []
     
     for i in range(num_warmup):
-        lambda_func(service, service_name, i, warmup_times)
+        lambda_func(service, service_name, i, warmup_times, warmup_details)
         time.sleep(0.2)  # small delay between warmup requests
     
     print(f"Warmup complete for {service_name}. History built with {len(warmup_times)} requests.")
+
+def categorize_job_size(input_file, service_name):
+    """
+    Categorize job as small, medium, or large based on input file number.
+    Returns 'short', 'medium', or 'long'
+    """
+    if input_file is None:
+        return 'unknown'
+    
+    # Extract number from filename
+    try:
+        if service_name in ["cnn-serving", "img-rot", "img-res"]:
+            # img files: img1.jpg to img40.jpg
+            file_num = int(input_file.replace('img', '').replace('.jpg', ''))
+            if file_num <= 15:
+                return 'short'
+            elif file_num <= 40:
+                return 'medium'
+            else:
+                return 'long'
+        elif service_name in ["vid-proc", "ml-train", "web-serve"]:
+            # vid/dataset/account files: 1-10
+            if 'vid' in input_file:
+                file_num = int(input_file.replace('vid', '').replace('.mp4', ''))
+            elif 'dataset' in input_file:
+                file_num = int(input_file.replace('dataset', '').replace('.csv', ''))
+            elif 'account' in input_file:
+                file_num = int(input_file.replace('account', '').replace('.txt', ''))
+            else:
+                return 'unknown'
+            
+            if file_num <= 3:
+                return 'short'
+            elif file_num <= 7:
+                return 'medium'
+            else:
+                return 'long'
+    except:
+        return 'unknown'
+    
+    return 'unknown'
+
+def print_job_breakdown(job_details, service_name, output_file):
+    """
+    Print breakdown of turnaround times by job size category in machine-readable format
+    """
+    short_jobs = []
+    medium_jobs = []
+    long_jobs = []
+    
+    for detail in job_details:
+        category = categorize_job_size(detail['input_file'], service_name)
+        tt = detail['turnaround_time']
+        
+        if category == 'short':
+            short_jobs.append(tt)
+        elif category == 'medium':
+            medium_jobs.append(tt)
+        elif category == 'long':
+            long_jobs.append(tt)
+    
+    # Machine-readable format: one value per line, easy to parse
+    print("BREAKDOWN_SHORT_COUNT", file=output_file, flush=True)
+    print(len(short_jobs) if short_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_SHORT_MEAN", file=output_file, flush=True)
+    print(mean(short_jobs) if short_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_SHORT_MEDIAN", file=output_file, flush=True)
+    print(median(short_jobs) if short_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_SHORT_P95", file=output_file, flush=True)
+    print(np.percentile(short_jobs, 95) if short_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_MEDIUM_COUNT", file=output_file, flush=True)
+    print(len(medium_jobs) if medium_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_MEDIUM_MEAN", file=output_file, flush=True)
+    print(mean(medium_jobs) if medium_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_MEDIUM_MEDIAN", file=output_file, flush=True)
+    print(median(medium_jobs) if medium_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_MEDIUM_P95", file=output_file, flush=True)
+    print(np.percentile(medium_jobs, 95) if medium_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_LONG_COUNT", file=output_file, flush=True)
+    print(len(long_jobs) if long_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_LONG_MEAN", file=output_file, flush=True)
+    print(mean(long_jobs) if long_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_LONG_MEDIAN", file=output_file, flush=True)
+    print(median(long_jobs) if long_jobs else 0, file=output_file, flush=True)
+    
+    print("BREAKDOWN_LONG_P95", file=output_file, flush=True)
+    print(np.percentile(long_jobs, 95) if long_jobs else 0, file=output_file, flush=True)
 
 def EnforceActivityWindow(start_time, end_time, instance_events):
     events_iit = []
@@ -204,6 +309,7 @@ for load in loads:
         threads = []
         times = []
         runner_times = []
+        job_details = []  # Track job details for breakdown
         after_time, before_time = 0, 0
 
         # Get the service name from the service URL
@@ -225,7 +331,7 @@ for load in loads:
                 time.sleep(st)
 
             # Pass the request index 'i' to the lambda_func
-            threadToAdd = threading.Thread(target=lambda_func, args=(service, current_service_name, i, runner_times))
+            threadToAdd = threading.Thread(target=lambda_func, args=(service, current_service_name, i, runner_times, job_details))
             threads.append(threadToAdd)
             threadToAdd.start()
             after_time = time.time()
@@ -240,5 +346,8 @@ for load in loads:
         print(np.percentile(runner_times, 95), file=output_file, flush=True)
         print(np.percentile(runner_times, 99), file=output_file, flush=True)
 
-        print(f"all times note for {load_desc[loads.index(load)]}", file=output_file, flush=True)
+        # Print job size breakdown
+        print_job_breakdown(job_details, current_service_name, output_file)
+
+        print(f"\nall times note for {load_desc[loads.index(load)]}", file=output_file, flush=True)
         print(runner_times, file=output_file, flush=True)
