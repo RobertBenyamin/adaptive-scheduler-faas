@@ -221,15 +221,27 @@ def myFunction(data_, clientSocket_, arrival_time):
     # sending all this stuff
     r = '%s %s %s\r\n' % (response_proto, response_status,
                           response_status_text)
+    
+    # CRITICAL SECTION: Block SIGTSTP during response sending to prevent
+    # preemption from interrupting socket writes and causing connection errors
     try:
+        # Block SIGTSTP to prevent preemption during response sending
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTSTP})
+        
         clientSocket_.send(r.encode(encoding="utf-8"))
         clientSocket_.send(response_headers_raw.encode(encoding="utf-8"))
         # to separate headers from body
         clientSocket_.send('\r\n'.encode(encoding="utf-8"))
         clientSocket_.send(msg.encode(encoding="utf-8"))
-    except:
-        clientSocket_.close()
-    clientSocket_.close()
+    except Exception as e:
+        print(f"Error sending response: {e}", flush=True)
+    finally:
+        # Unblock SIGTSTP after response is sent
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTSTP})
+        try:
+            clientSocket_.close()
+        except:
+            pass
 
 
 def train_models(history):
@@ -357,6 +369,38 @@ def waitTermination(childPid):
 
     # PREEMPTION: Cek apakah ada proses dengan waktu tersisa lebih pendek dari proses yang berjalan
     if processQueue:
+        # Clean up stale PIDs from the queue before scheduling
+        # A PID is stale if the process no longer exists (not in /proc/{pid})
+        def is_process_alive(pid):
+            """Check if a process is still alive using /proc filesystem."""
+            try:
+                # On Linux, /proc/{pid} exists if process is alive
+                return os.path.exists(f"/proc/{pid}")
+            except Exception:
+                return False
+        
+        # Filter out dead processes from the queue
+        original_queue_size = len(processQueue)
+        processQueue[:] = [
+            (remaining_time, pid) for remaining_time, pid in processQueue
+            if pid in mapPIDtoStatus and is_process_alive(pid)
+        ]
+        
+        # Also clean up mapPIDtoStatus for dead processes
+        dead_pids = [pid for pid in mapPIDtoStatus if not is_process_alive(pid)]
+        for dead_pid in dead_pids:
+            mapPIDtoStatus.pop(dead_pid, None)
+            processTimestamps.pop(dead_pid, None)
+            processStartTime.pop(dead_pid, None)
+            processExecutedTime.pop(dead_pid, None)
+        
+        if original_queue_size != len(processQueue):
+            # Rebuild heap after filtering
+            try:
+                heapq.heapify(processQueue)
+            except Exception:
+                pass
+
         # Urutkan queue berdasarkan 1 / remaining_time untuk SRTF
         def priority_selector(process_item):
             _, pid = process_item
@@ -415,7 +459,8 @@ def waitTermination(childPid):
                             elapsed_since_start = time.time() - processStartTime[current_running_pid]
                             processExecutedTime[current_running_pid] = processExecutedTime.get(current_running_pid, 0) + elapsed_since_start
                             processStartTime.pop(current_running_pid, None)
-                        os.kill(current_running_pid, signal.SIGSTOP)
+                        # Use SIGTSTP instead of SIGSTOP so child can block it during response sending
+                        os.kill(current_running_pid, signal.SIGTSTP)
                         mapPIDtoStatus[current_running_pid] = "waiting"
 
                         # set last_wait_start (keep accumulated if any)
@@ -630,7 +675,7 @@ def performIO(clientSocket_):
         except Exception:
             pass
         try:
-            os.kill(blockedID, signal.SIGSTOP)
+            os.kill(blockedID, signal.SIGTSTP)
         except:
             pass
     lockPIDMap.release()
@@ -801,7 +846,8 @@ def handle_client_connection(clientSocket, address):
             if waitForRunning:
                 # If there is no free resources (cpu core) for the process to run, then we set the childprocess to sleep.
                 mapPIDtoStatus[childProcess] = "waiting"
-                os.kill(childProcess, signal.SIGSTOP)
+                # Use SIGTSTP instead of SIGSTOP so child can block it during response
+                os.kill(childProcess, signal.SIGTSTP)
 
                 # Push to priority queue (using burstTime for SRTF logic)
                 heapq.heappush(processQueue, (estimated_burst_time, childProcess))
@@ -819,10 +865,13 @@ def handle_client_connection(clientSocket, address):
             threadWait = threading.Thread(target=waitTermination, args=(childProcess,))
             threadWait.daemon = True
             threadWait.start()
+            
+            # Parent should NOT close the socket - child process owns it now
+            # The child will close it after sending the response in myFunction()
 
     except Exception as e:
         print(f"Error handling client {address}: {e}", flush=True)
-    finally:
+        # Only close socket on error (child wasn't forked successfully)
         try:
             clientSocket.close()
         except:
