@@ -18,6 +18,11 @@ kubectl delete -f web_serve.yaml
 
 cd ..
 
+# Force delete any stuck terminating pods
+echo "Force deleting any terminating pods..."
+kubectl get pods | grep Terminating | awk '{print $1}' | xargs -r kubectl delete pod --grace-period=0 --force
+echo "Terminating pods force deleted."
+
 # Delete the namespaces which will also delete all the resources within them.
 # The --wait flag ensures the command blocks until deletion is complete.
 echo "Deleting Knative namespaces and waiting for completion..."
