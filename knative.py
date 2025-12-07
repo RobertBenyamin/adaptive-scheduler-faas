@@ -61,17 +61,17 @@ TEST_DATA_CONFIG = {
 # - Total 18 items to avoid too much repetition
 TEST_SEQUENCES = {
     "cnn-serving": [f"img{i}.jpg" for i in [
-        45, 44,
+        42, 41,
         2, 1, 3,
         20, 25, 28,
     ]],
     "img-rot": [f"img{i}.jpg" for i in [
-        45, 44,
+        42, 41,
         2, 1, 3,
         20, 25, 28,
     ]],
     "img-res": [f"img{i}.jpg" for i in [
-        45, 44,
+        42, 41,
         2, 1, 3,
         20, 25, 28,
     ]],
