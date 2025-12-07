@@ -220,15 +220,27 @@ def myFunction(data_, clientSocket_, arrival_time):
     # sending all this stuff
     r = '%s %s %s\r\n' % (response_proto, response_status,
                           response_status_text)
+    
+    # CRITICAL SECTION: Block SIGTSTP during response sending to prevent
+    # preemption from interrupting socket writes and causing connection errors
     try:
+        # Block SIGTSTP to prevent preemption during response sending
+        signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTSTP})
+        
         clientSocket_.send(r.encode(encoding="utf-8"))
         clientSocket_.send(response_headers_raw.encode(encoding="utf-8"))
         # to separate headers from body
         clientSocket_.send('\r\n'.encode(encoding="utf-8"))
         clientSocket_.send(msg.encode(encoding="utf-8"))
-    except:
-        clientSocket_.close()
-    clientSocket_.close()
+    except Exception as e:
+        print(f"Error sending response: {e}", flush=True)
+    finally:
+        # Unblock SIGTSTP after response is sent
+        signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTSTP})
+        try:
+            clientSocket_.close()
+        except:
+            pass
 
 
 # Parameter Mitigasi Ketidakpastian
@@ -434,12 +446,13 @@ def waitTermination(childPid):
 
                     # Hentikan proses yang berjalan
                     try:
-                        # sebelum SIGSTOP, akumulasikan waktu yang sudah berjalan
+                        # sebelum SIGTSTP, akumulasikan waktu yang sudah berjalan
                         if current_running_pid in processStartTime:
                             elapsed_since_start = time.time() - processStartTime[current_running_pid]
                             processExecutedTime[current_running_pid] = processExecutedTime.get(current_running_pid, 0) + elapsed_since_start
                             processStartTime.pop(current_running_pid, None)
-                        os.kill(current_running_pid, signal.SIGSTOP)
+                        # Use SIGTSTP instead of SIGSTOP so child can block it during response sending
+                        os.kill(current_running_pid, signal.SIGTSTP)
                         mapPIDtoStatus[current_running_pid] = "waiting"
 
                         # set last_wait_start (keep accumulated if any)
@@ -656,7 +669,7 @@ def performIO(clientSocket_):
         except Exception:
             pass
         try:
-            os.kill(blockedID, signal.SIGSTOP)
+            os.kill(blockedID, signal.SIGTSTP)
         except:
             pass
     lockPIDMap.release()
@@ -831,7 +844,8 @@ def handle_client_connection(clientSocket, address):
             if waitForRunning:
                 # If there is no free resources (cpu core) for the process to run, then we set the childprocess to sleep.
                 mapPIDtoStatus[childProcess] = "waiting"
-                os.kill(childProcess, signal.SIGSTOP)
+                # Use SIGTSTP instead of SIGSTOP so child can block it during response
+                os.kill(childProcess, signal.SIGTSTP)
 
                 # Push to priority queue (using burstTime for SRTF logic)
                 heapq.heappush(processQueue, (estimated_burst_time, childProcess))
