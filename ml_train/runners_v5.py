@@ -849,10 +849,13 @@ def handle_client_connection(clientSocket, address):
             threadWait = threading.Thread(target=waitTermination, args=(childProcess,))
             threadWait.daemon = True
             threadWait.start()
+            
+            # Parent should NOT close the socket - child process owns it now
+            # The child will close it after sending the response in myFunction()
 
     except Exception as e:
         print(f"Error handling client {address}: {e}", flush=True)
-    finally:
+        # Only close socket on error (child wasn't forked successfully)
         try:
             clientSocket.close()
         except:
