@@ -33,4 +33,4 @@ sudo kubectl patch configmap/config-domain \
 sudo kubectl patch configmap/config-defaults \
   -n knative-serving \
   --type merge \
-  -p '{"data":{"revision-timeout-seconds": "600"}}'
+  -p '{"data":{"revision-timeout-seconds": "3600"}}'

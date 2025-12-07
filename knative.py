@@ -136,7 +136,7 @@ def lambda_func(service, service_name, request_index, runner_times_list):
 
     # Perform POST to the IP, but override the Host header
     try:
-        r = requests.post(target_ip, headers=headers, json=payload)
+        r = requests.post(target_ip, headers=headers, json=payload, timeout=3600)
         # safer debug output
         print(f"status={r.status_code} url={service} body={repr(r.text)}")
 
