@@ -348,6 +348,39 @@ def waitTermination(childPid):
 
     # PREEMPTION: Cek apakah ada proses dengan waktu tersisa lebih pendek dari proses yang berjalan
     if processQueue:
+        # Clean up stale PIDs from the queue before scheduling
+        # A PID is stale if the process no longer exists (not in /proc/{pid})
+        def is_process_alive(pid):
+            """Check if a process is still alive using /proc filesystem."""
+            try:
+                # On Linux, /proc/{pid} exists if process is alive
+                return os.path.exists(f"/proc/{pid}")
+            except Exception:
+                return False
+        
+        # Filter out dead processes from the queue
+        original_queue_size = len(processQueue)
+        processQueue[:] = [
+            (remaining_time, pid) for remaining_time, pid in processQueue
+            if pid in mapPIDtoStatus and is_process_alive(pid)
+        ]
+        
+        # Also clean up mapPIDtoStatus for dead processes
+        dead_pids = [pid for pid in mapPIDtoStatus if not is_process_alive(pid)]
+        for dead_pid in dead_pids:
+            mapPIDtoStatus.pop(dead_pid, None)
+            processTimestamps.pop(dead_pid, None)
+            processStartTime.pop(dead_pid, None)
+            processExecutedTime.pop(dead_pid, None)
+        
+        if original_queue_size != len(processQueue):
+            # Rebuild heap after filtering
+            try:
+                heapq.heapify(processQueue)
+            except Exception:
+                pass
+
+    if processQueue:
         # Urutkan queue berdasarkan 1 / remaining_time untuk SRTF
         def priority_selector(process_item):
             _, pid = process_item
