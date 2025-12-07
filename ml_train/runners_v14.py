@@ -9,11 +9,6 @@ import time
 import signal
 from storage_helper import download_file, upload_file
 import heapq
-
-# LSTM-specific imports
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.optimizers import Adam
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -127,6 +122,10 @@ def build_lstm_model(input_shape):
     """
     Build a SMALLER and FASTER LSTM model optimized for small datasets.
     """
+    from tensorflow.keras.models import Sequential
+    from tensorflow.keras.layers import LSTM, Dense, Dropout
+    from tensorflow.keras.optimizers import Adam
+
     model = Sequential([
         LSTM(8, activation='relu', input_shape=input_shape,  # Reduced from 16 to 8
              return_sequences=False),
