@@ -7,11 +7,7 @@ import socket
 import numpy as np
 import time
 import signal
-import requests
-from threading import Thread
 from storage_helper import download_file, upload_file
-from sklearn.linear_model import LinearRegression
-from sklearn.ensemble import RandomForestRegressor
 import heapq
 
 # LSTM-specific imports
