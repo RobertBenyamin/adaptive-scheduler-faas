@@ -20,7 +20,7 @@ cd ..
 
 # Force delete any stuck terminating pods
 echo "Force deleting any terminating pods..."
-kubectl get pods | grep Terminating | awk '{print $1}' | xargs -r kubectl delete pod --grace-period=0 --force
+kubectl delete pods --all --force --grace-period=0
 echo "Terminating pods force deleted."
 
 # Delete the namespaces which will also delete all the resources within them.
