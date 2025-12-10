@@ -23,16 +23,19 @@ echo "Force deleting any terminating pods..."
 kubectl delete pods --all --force --grace-period=0
 echo "Terminating pods force deleted."
 
-# Delete the namespaces which will also delete all the resources within them.
-# The --wait flag ensures the command blocks until deletion is complete.
-echo "Deleting Knative namespaces and waiting for completion..."
-kubectl delete namespace knative-serving --wait=true --ignore-not-found=true
-kubectl delete namespace kourier-system --wait=true --ignore-not-found=true
-echo "Knative namespaces deleted."
+# Delete the namespaces
+echo "Deleting Knative namespaces..."
+kubectl delete namespace knative-serving --ignore-not-found=true
+kubectl delete namespace kourier-system --ignore-not-found=true
+echo "Knative namespaces deletion initiated."
 
-# The CRDs should be deleted last.
+# Delete the CRDs
 echo "Deleting Knative CRDs..."
-kubectl delete -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-crds.yaml --wait=true --ignore-not-found=true
-echo "Knative CRDs deleted."
+kubectl delete -f https://github.com/knative/serving/releases/download/knative-v1.9.1/serving-crds.yaml --ignore-not-found=true
+echo "Knative CRDs deletion initiated."
 
-echo "Cleanup complete."
+# Force delete any stuck terminating pods again
+echo "Force deleting any remaining terminating pods..."
+kubectl delete pods --all --force --grace-period=0
+
+echo "Cleanup initiated."
