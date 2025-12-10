@@ -23,7 +23,7 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 # 19v2 - Improved version with hybrid fallback and better cold start handling
-class SA_RF_CDD_Wrapper:
+class AdaptiveRandomForest:
     def __init__(self):
         # Using AdaptiveRandomForestRegressor from River (river 0.14.0 API)
         # Implements Hoeffding Trees + ADWIN (Drift Detection) internally
@@ -253,8 +253,8 @@ responseMapWindows = []  # map from pid to response
 
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
-# SA-RF-CDD model instance (replaces sklearn RandomForest)
-sa_rf_cdd_model = SA_RF_CDD_Wrapper()
+# ARF model instance
+arf_model = AdaptiveRandomForest()
 model_lock = threading.Lock()
 
 
@@ -383,13 +383,13 @@ def myFunction(data_, clientSocket_, arrival_time):
 
 def get_burst_time_prediction():
     """
-    Get burst time prediction using SA-RF-CDD (stream-based, no caching needed).
+    Get burst time prediction using ARF (stream-based, no caching needed).
     The model is already incremental, so prediction is O(depth).
     """
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
 
     with model_lock:
-        prediction = sa_rf_cdd_model.predict(history)
+        prediction = arf_model.predict(history)
 
     return prediction if prediction is not None else 2.0
 
@@ -397,7 +397,7 @@ def get_burst_time_prediction():
 # Function to calculate Remaining Time
 def calculate_remaining_time(pid):
     """
-    Calculate remaining time using SA-RF-CDD prediction.
+    Calculate remaining time using ARF prediction.
     """
     # Get prediction from stream-based model
     estimated_burst_time = get_burst_time_prediction()
@@ -475,7 +475,7 @@ def waitTermination(childPid):
         # Learn from this execution (incremental update)
         history_context = list(processExecutionHistory[FUNCTION_HISTORY_KEY])
         with model_lock:
-            sa_rf_cdd_model.learn(
+            arf_model.learn(
                 history_context, arrival_time, total_executed)
 
         # Add to history after learning
@@ -924,10 +924,10 @@ def handle_client_connection(clientSocket, address):
                 responseMapWindows = []
                 # Reset execution history for round separation
                 processExecutionHistory[FUNCTION_HISTORY_KEY] = []
-                # Reset SA-RF-CDD model to fresh state
+                # Reset ARF model to fresh state
                 with model_lock:
-                    global sa_rf_cdd_model
-                    sa_rf_cdd_model = SA_RF_CDD_Wrapper()
+                    global arf_model
+                    arf_model = AdaptiveRandomForest()
                 result = {"Response": "History Reset"}
                 msg = json.dumps(result)
                 responseFlag = True
@@ -956,7 +956,7 @@ def handle_client_connection(clientSocket, address):
         # Record arrival time for this request
         arrival_time = time.time()
 
-        # Get burst time prediction using SA-RF-CDD
+        # Get burst time prediction using ARF
         estimated_burst_time = get_burst_time_prediction()
 
         # A status mark of whether the process can run based on the free resources
