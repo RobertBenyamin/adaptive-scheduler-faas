@@ -1,5 +1,7 @@
-import json
 import os
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' # Reduce noise
+import json
 import sys
 import signal
 import threading
@@ -26,7 +28,7 @@ def signal_handler(sig, frame):
 class OnlineLSTM:
     def __init__(self, sequence_length=3):
         self.seq_len = sequence_length
-        self.model = self._build_model()
+        self.model = None
         self.samples_learned = 0
         
         # Dynamic Normalization Parameters (Update as we learn)
@@ -40,20 +42,20 @@ class OnlineLSTM:
         self.MIN_SAMPLES_FOR_LSTM = 5
         self.model_lock = threading.Lock()
 
-    def _build_model(self):
-        """Builds a lightweight LSTM for incremental updates."""
-        from tensorflow.keras.models import Sequential
-        from tensorflow.keras.layers import LSTM, Dense
-        from tensorflow.keras.optimizers import Adam
-        
-        model = Sequential([
-            LSTM(8, activation='relu', input_shape=(self.seq_len, 1)),
-            Dense(4, activation='relu'),
-            Dense(1, activation='relu')
-        ])
-        # High learning rate for faster adaptation in 'Online' mode
-        model.compile(optimizer=Adam(learning_rate=0.01), loss='mse')
-        return model
+    def _ensure_model(self):
+        """Initializes the model only when first needed."""
+        if self.model is None:
+            # Import inside the method to ensure clean process state
+            from tensorflow.keras.models import Sequential
+            from tensorflow.keras.layers import LSTM, Dense
+            from tensorflow.keras.optimizers import Adam
+            
+            self.model = Sequential([
+                LSTM(8, activation='relu', input_shape=(self.seq_len, 1)),
+                Dense(4, activation='relu'),
+                Dense(1, activation='relu')
+            ])
+            self.model.compile(optimizer=Adam(learning_rate=0.01), loss='mse')
 
     def _normalize(self, value):
         if self.max_val == self.min_val: return 0.5
@@ -72,6 +74,8 @@ class OnlineLSTM:
             return self.ewma_value if self.ewma_value else 2.0
 
         with self.model_lock:
+            self._ensure_model()
+            
             # Prepare last sequence
             seq = np.array(history[-self.seq_len:], dtype=np.float32)
             norm_seq = np.array([self._normalize(v) for v in seq]).reshape(1, self.seq_len, 1)
