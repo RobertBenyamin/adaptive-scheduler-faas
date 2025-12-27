@@ -1,7 +1,5 @@
-import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' # Reduce noise
 import json
+import os
 import sys
 import signal
 import threading
@@ -12,11 +10,15 @@ import signal
 from storage_helper import download_file, upload_file
 import heapq
 import warnings
+from collections import deque
 warnings.filterwarnings('ignore')
 
-# TensorFlow imports for Online LSTM
-import tensorflow as tf
-from collections import deque
+# CRITICAL: Set TensorFlow to not allocate GPU memory and reduce threads
+# This MUST be done before importing TensorFlow
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TF warnings
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'  # Disable GPU
+os.environ['TF_NUM_INTEROP_THREADS'] = '1'
+os.environ['TF_NUM_INTRAOP_THREADS'] = '1'
 
 current_path = "/app/pythonAction"
 TMP_DIR = "/tmp"
@@ -119,84 +121,298 @@ responseMapWindows = []  # map from pid to response
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 # ============================================================================
-# ONLINE LSTM WITH ONLINE GRADIENT DESCENT (OGD) IMPLEMENTATION
+# ONLINE LSTM WITH ONLINE GRADIENT DESCENT (OGD) - FORK-SAFE IMPLEMENTATION
+# Uses NumPy-based LSTM to avoid TensorFlow fork issues
 # ============================================================================
 
-class OnlineLSTMModel:
+class OnlineLSTMNumpy:
     """
-    Online LSTM that updates weights incrementally using Online Gradient Descent.
-    Each new observation triggers a single gradient update step.
+    Online LSTM implemented in pure NumPy for fork-safety.
+    Updates weights incrementally using Online Gradient Descent.
+    
+    This avoids TensorFlow's fork-unsafety issues completely.
     """
     
-    def __init__(self, sequence_length=3, hidden_units=8, learning_rate=0.01):
+    def __init__(self, sequence_length=3, hidden_size=8, learning_rate=0.01):
         self.sequence_length = sequence_length
-        self.hidden_units = hidden_units
+        self.hidden_size = hidden_size
+        self.input_size = 1
+        self.output_size = 1
         self.initial_learning_rate = learning_rate
         self.learning_rate = learning_rate
         
-        # Sequence buffer to store recent observations
+        # Initialize LSTM weights using Xavier initialization
+        self._init_weights()
+        
+        # Sequence buffer for online learning
         self.sequence_buffer = deque(maxlen=sequence_length + 1)
         
-        # Running statistics for online normalization
+        # Running statistics for online normalization (Welford's algorithm)
         self.running_mean = 0.0
         self.running_var = 1.0
         self.n_samples = 0
         self.min_val = float('inf')
         self.max_val = float('-inf')
         
-        # Build the LSTM model
-        self.model = self._build_model()
+        # Hidden and cell states (maintained across predictions for true online learning)
+        self.h = np.zeros((1, hidden_size))
+        self.c = np.zeros((1, hidden_size))
         
-        # Optimizer for online gradient descent
-        self.optimizer = tf.keras.optimizers.Adam(learning_rate=learning_rate)
-        
-        # Loss function
-        self.loss_fn = tf.keras.losses.MeanSquaredError()
-        
-        # Track training metrics
+        # Training metrics
         self.total_updates = 0
         self.cumulative_loss = 0.0
         
-        # Learning rate decay parameters
+        # Learning rate decay
         self.decay_rate = 0.999
         self.min_learning_rate = 0.001
         
-    def _build_model(self):
-        """Build a lightweight LSTM model for online learning."""
-        model = tf.keras.Sequential([
-            tf.keras.layers.LSTM(
-                self.hidden_units, 
-                activation='tanh',
-                recurrent_activation='sigmoid',
-                input_shape=(self.sequence_length, 1),
-                return_sequences=False,
-                # Use smaller recurrent dropout for stability
-                recurrent_dropout=0.0,
-                dropout=0.0
-            ),
-            tf.keras.layers.Dense(4, activation='relu'),
-            tf.keras.layers.Dense(1, activation='linear')  # Linear for regression
-        ])
-        return model
+        # Gradient clipping threshold
+        self.clip_value = 1.0
+        
+        # Adam optimizer states
+        self.m = {}  # First moment
+        self.v = {}  # Second moment
+        self.beta1 = 0.9
+        self.beta2 = 0.999
+        self.epsilon = 1e-8
+        self.t = 0  # Time step for Adam
+        
+    def _init_weights(self):
+        """Initialize LSTM weights using Xavier initialization."""
+        h = self.hidden_size
+        i = self.input_size
+        
+        # Xavier scale factors
+        scale_ih = np.sqrt(2.0 / (i + h))
+        scale_hh = np.sqrt(2.0 / (h + h))
+        scale_ho = np.sqrt(2.0 / (h + self.output_size))
+        
+        # LSTM weights: [input_gate, forget_gate, cell_gate, output_gate]
+        # Input to hidden weights (4 gates)
+        self.W_ih = np.random.randn(i, 4 * h).astype(np.float32) * scale_ih
+        # Hidden to hidden weights (4 gates)
+        self.W_hh = np.random.randn(h, 4 * h).astype(np.float32) * scale_hh
+        # Biases for gates
+        self.b_ih = np.zeros((1, 4 * h), dtype=np.float32)
+        self.b_hh = np.zeros((1, 4 * h), dtype=np.float32)
+        
+        # Set forget gate bias to 1.0 for better gradient flow
+        self.b_ih[0, h:2*h] = 1.0
+        self.b_hh[0, h:2*h] = 1.0
+        
+        # Output layer weights
+        self.W_out = np.random.randn(h, self.output_size).astype(np.float32) * scale_ho
+        self.b_out = np.zeros((1, self.output_size), dtype=np.float32)
+        
+    def _sigmoid(self, x):
+        """Numerically stable sigmoid."""
+        return np.where(x >= 0, 
+                       1 / (1 + np.exp(-x)), 
+                       np.exp(x) / (1 + np.exp(x)))
+    
+    def _sigmoid_derivative(self, s):
+        """Derivative of sigmoid given sigmoid output."""
+        return s * (1 - s)
+    
+    def _tanh_derivative(self, t):
+        """Derivative of tanh given tanh output."""
+        return 1 - t ** 2
+    
+    def _lstm_forward(self, x_seq, return_cache=False):
+        """
+        Forward pass through LSTM.
+        
+        Args:
+            x_seq: Input sequence of shape (seq_len, input_size)
+            return_cache: If True, return intermediate values for backprop
+            
+        Returns:
+            output: Final output
+            cache: Intermediate values if return_cache=True
+        """
+        seq_len = x_seq.shape[0]
+        h = self.hidden_size
+        
+        # Initialize hidden states
+        h_t = np.zeros((1, h), dtype=np.float32)
+        c_t = np.zeros((1, h), dtype=np.float32)
+        
+        # Cache for backpropagation
+        cache = {
+            'x': [], 'h': [h_t.copy()], 'c': [c_t.copy()],
+            'i': [], 'f': [], 'g': [], 'o': []
+        }
+        
+        for t in range(seq_len):
+            x_t = x_seq[t:t+1, :]  # (1, input_size)
+            
+            # Compute gates
+            gates = x_t @ self.W_ih + h_t @ self.W_hh + self.b_ih + self.b_hh
+            
+            # Split gates
+            i_t = self._sigmoid(gates[:, :h])           # Input gate
+            f_t = self._sigmoid(gates[:, h:2*h])        # Forget gate
+            g_t = np.tanh(gates[:, 2*h:3*h])            # Cell gate
+            o_t = self._sigmoid(gates[:, 3*h:])         # Output gate
+            
+            # Update cell and hidden state
+            c_t = f_t * c_t + i_t * g_t
+            h_t = o_t * np.tanh(c_t)
+            
+            # Store cache
+            cache['x'].append(x_t)
+            cache['h'].append(h_t.copy())
+            cache['c'].append(c_t.copy())
+            cache['i'].append(i_t)
+            cache['f'].append(f_t)
+            cache['g'].append(g_t)
+            cache['o'].append(o_t)
+        
+        # Output layer
+        output = h_t @ self.W_out + self.b_out
+        
+        if return_cache:
+            return output, cache
+        return output
+    
+    def _lstm_backward(self, d_output, cache):
+        """
+        Backward pass through LSTM (BPTT - Backpropagation Through Time).
+        
+        Args:
+            d_output: Gradient of loss w.r.t output
+            cache: Cached values from forward pass
+            
+        Returns:
+            gradients: Dictionary of gradients for all weights
+        """
+        h = self.hidden_size
+        seq_len = len(cache['x'])
+        
+        # Initialize gradients
+        dW_ih = np.zeros_like(self.W_ih)
+        dW_hh = np.zeros_like(self.W_hh)
+        db_ih = np.zeros_like(self.b_ih)
+        db_hh = np.zeros_like(self.b_hh)
+        dW_out = np.zeros_like(self.W_out)
+        db_out = np.zeros_like(self.b_out)
+        
+        # Output layer gradients
+        dW_out = cache['h'][-1].T @ d_output
+        db_out = d_output.copy()
+        
+        # Gradient w.r.t final hidden state
+        dh_next = d_output @ self.W_out.T
+        dc_next = np.zeros((1, h), dtype=np.float32)
+        
+        # Backprop through time
+        for t in reversed(range(seq_len)):
+            x_t = cache['x'][t]
+            h_prev = cache['h'][t]
+            c_prev = cache['c'][t]
+            c_t = cache['c'][t + 1]
+            i_t = cache['i'][t]
+            f_t = cache['f'][t]
+            g_t = cache['g'][t]
+            o_t = cache['o'][t]
+            
+            # Gradient through output gate
+            tanh_c = np.tanh(c_t)
+            do = dh_next * tanh_c
+            do_gate = do * self._sigmoid_derivative(o_t)
+            
+            # Gradient through cell state
+            dc = dh_next * o_t * self._tanh_derivative(tanh_c) + dc_next
+            
+            # Gradient through forget gate
+            df = dc * c_prev
+            df_gate = df * self._sigmoid_derivative(f_t)
+            
+            # Gradient through input gate
+            di = dc * g_t
+            di_gate = di * self._sigmoid_derivative(i_t)
+            
+            # Gradient through cell gate
+            dg = dc * i_t
+            dg_gate = dg * self._tanh_derivative(g_t)
+            
+            # Concatenate gate gradients
+            d_gates = np.concatenate([di_gate, df_gate, dg_gate, do_gate], axis=1)
+            
+            # Weight gradients
+            dW_ih += x_t.T @ d_gates
+            dW_hh += h_prev.T @ d_gates
+            db_ih += d_gates
+            db_hh += d_gates
+            
+            # Gradient for previous timestep
+            dh_next = d_gates @ self.W_hh.T
+            dc_next = dc * f_t
+        
+        return {
+            'W_ih': dW_ih, 'W_hh': dW_hh, 
+            'b_ih': db_ih, 'b_hh': db_hh,
+            'W_out': dW_out, 'b_out': db_out
+        }
+    
+    def _clip_gradients(self, gradients):
+        """Clip gradients to prevent exploding gradients."""
+        for key in gradients:
+            gradients[key] = np.clip(gradients[key], -self.clip_value, self.clip_value)
+        return gradients
+    
+    def _adam_update(self, gradients):
+        """Apply Adam optimizer update."""
+        self.t += 1
+        
+        params = {
+            'W_ih': self.W_ih, 'W_hh': self.W_hh,
+            'b_ih': self.b_ih, 'b_hh': self.b_hh,
+            'W_out': self.W_out, 'b_out': self.b_out
+        }
+        
+        for key in params:
+            if key not in self.m:
+                self.m[key] = np.zeros_like(params[key])
+                self.v[key] = np.zeros_like(params[key])
+            
+            # Update biased first and second moment estimates
+            self.m[key] = self.beta1 * self.m[key] + (1 - self.beta1) * gradients[key]
+            self.v[key] = self.beta2 * self.v[key] + (1 - self.beta2) * (gradients[key] ** 2)
+            
+            # Bias-corrected estimates
+            m_hat = self.m[key] / (1 - self.beta1 ** self.t)
+            v_hat = self.v[key] / (1 - self.beta2 ** self.t)
+            
+            # Update parameters
+            params[key] -= self.learning_rate * m_hat / (np.sqrt(v_hat) + self.epsilon)
+        
+        # Write back
+        self.W_ih = params['W_ih']
+        self.W_hh = params['W_hh']
+        self.b_ih = params['b_ih']
+        self.b_hh = params['b_hh']
+        self.W_out = params['W_out']
+        self.b_out = params['b_out']
     
     def _update_running_stats(self, value):
-        """Update running statistics for online normalization (Welford's algorithm)."""
+        """Update running statistics for online normalization."""
         self.n_samples += 1
         
         # Update min/max
         self.min_val = min(self.min_val, value)
         self.max_val = max(self.max_val, value)
         
-        # Welford's online algorithm for mean and variance
+        # Welford's online algorithm
         delta = value - self.running_mean
         self.running_mean += delta / self.n_samples
         delta2 = value - self.running_mean
         self.running_var += (delta * delta2 - self.running_var) / self.n_samples
         
     def _normalize(self, value):
-        """Normalize a value using running statistics."""
+        """Normalize a value using min-max scaling."""
         if self.max_val == self.min_val:
-            return 0.0
+            return 0.5
         return (value - self.min_val) / (self.max_val - self.min_val + 1e-8)
     
     def _denormalize(self, value):
@@ -206,40 +422,11 @@ class OnlineLSTMModel:
         return value * (self.max_val - self.min_val) + self.min_val
     
     def _decay_learning_rate(self):
-        """Apply learning rate decay for stability."""
+        """Apply learning rate decay."""
         self.learning_rate = max(
             self.learning_rate * self.decay_rate,
             self.min_learning_rate
         )
-        self.optimizer.learning_rate.assign(self.learning_rate)
-    
-    @tf.function
-    def _train_step(self, X, y):
-        """
-        Perform a single gradient descent step (Online Gradient Descent).
-        This is the core of online learning.
-        """
-        with tf.GradientTape() as tape:
-            # Forward pass
-            prediction = self.model(X, training=True)
-            # Compute loss
-            loss = self.loss_fn(y, prediction)
-        
-        # Compute gradients
-        gradients = tape.gradient(loss, self.model.trainable_variables)
-        
-        # Clip gradients to prevent exploding gradients
-        clipped_gradients = [
-            tf.clip_by_value(g, -1.0, 1.0) if g is not None else g 
-            for g in gradients
-        ]
-        
-        # Apply gradients (single update step)
-        self.optimizer.apply_gradients(
-            zip(clipped_gradients, self.model.trainable_variables)
-        )
-        
-        return loss, prediction
     
     def partial_fit(self, new_value):
         """
@@ -263,36 +450,39 @@ class OnlineLSTMModel:
         if len(self.sequence_buffer) < self.sequence_length + 1:
             return None
         
-        # Prepare training data from buffer
-        # X: sequence of length `sequence_length`
-        # y: the next value (target)
+        # Prepare training data
         buffer_list = list(self.sequence_buffer)
-        X_seq = np.array(buffer_list[:-1], dtype=np.float32)
-        y_target = np.array([buffer_list[-1]], dtype=np.float32)
+        X_seq = np.array(buffer_list[:-1], dtype=np.float32).reshape(-1, 1)
+        y_target = np.array([[buffer_list[-1]]], dtype=np.float32)
         
-        # Reshape for LSTM: (batch_size=1, sequence_length, features=1)
-        X_seq = X_seq.reshape(1, self.sequence_length, 1)
-        y_target = y_target.reshape(1, 1)
+        # Forward pass with cache
+        output, cache = self._lstm_forward(X_seq, return_cache=True)
         
-        # Convert to tensors
-        X_tensor = tf.convert_to_tensor(X_seq, dtype=tf.float32)
-        y_tensor = tf.convert_to_tensor(y_target, dtype=tf.float32)
+        # Compute MSE loss
+        loss = float(np.mean((output - y_target) ** 2))
         
-        # Perform single gradient update (Online Gradient Descent)
-        loss, _ = self._train_step(X_tensor, y_tensor)
+        # Backward pass
+        d_output = 2 * (output - y_target) / output.size  # MSE gradient
+        gradients = self._lstm_backward(d_output, cache)
+        
+        # Clip gradients
+        gradients = self._clip_gradients(gradients)
+        
+        # Apply Adam update (Online Gradient Descent step)
+        self._adam_update(gradients)
         
         # Update metrics
         self.total_updates += 1
-        self.cumulative_loss += float(loss)
+        self.cumulative_loss += loss
         
-        # Decay learning rate for stability
+        # Decay learning rate
         self._decay_learning_rate()
         
-        return float(loss)
+        return loss
     
     def predict(self):
         """
-        Predict the next burst time using the current model state.
+        Predict the next burst time.
         
         Returns:
             Predicted burst time (denormalized) or None if not enough data
@@ -301,45 +491,45 @@ class OnlineLSTMModel:
             return None
         
         try:
-            # Get the last `sequence_length` values
+            # Get last sequence_length values
             buffer_list = list(self.sequence_buffer)
-            X_seq = np.array(buffer_list[-self.sequence_length:], dtype=np.float32)
-            X_seq = X_seq.reshape(1, self.sequence_length, 1)
+            X_seq = np.array(buffer_list[-self.sequence_length:], dtype=np.float32).reshape(-1, 1)
             
-            # Make prediction
-            X_tensor = tf.convert_to_tensor(X_seq, dtype=tf.float32)
-            prediction_normalized = self.model(X_tensor, training=False).numpy()[0][0]
+            # Forward pass (no cache needed)
+            output = self._lstm_forward(X_seq, return_cache=False)
             
             # Denormalize
-            prediction = self._denormalize(prediction_normalized)
+            prediction = self._denormalize(float(output[0, 0]))
             
-            # Ensure non-negative
-            return max(float(prediction), 0.0)
-        
+            return max(prediction, 0.0)
+            
         except Exception as e:
             print(f"Online LSTM prediction error: {e}")
             return None
     
     def get_average_loss(self):
-        """Get the average loss across all updates."""
+        """Get average loss across all updates."""
         if self.total_updates == 0:
             return 0.0
         return self.cumulative_loss / self.total_updates
     
     def reset(self):
-        """Reset the model for a new round/experiment."""
+        """Reset model for a new round."""
+        self._init_weights()
         self.sequence_buffer.clear()
         self.running_mean = 0.0
         self.running_var = 1.0
         self.n_samples = 0
         self.min_val = float('inf')
         self.max_val = float('-inf')
+        self.h = np.zeros((1, self.hidden_size))
+        self.c = np.zeros((1, self.hidden_size))
         self.total_updates = 0
         self.cumulative_loss = 0.0
         self.learning_rate = self.initial_learning_rate
-        self.optimizer.learning_rate.assign(self.learning_rate)
-        # Rebuild model to reset weights
-        self.model = self._build_model()
+        self.m = {}
+        self.v = {}
+        self.t = 0
 
 
 # Global Online LSTM instance
@@ -348,9 +538,9 @@ online_lstm_lock = threading.Lock()
 
 # Configuration
 ONLINE_LSTM_SEQUENCE_LENGTH = 3
-ONLINE_LSTM_HIDDEN_UNITS = 8
+ONLINE_LSTM_HIDDEN_SIZE = 8
 ONLINE_LSTM_LEARNING_RATE = 0.01
-ONLINE_LSTM_MIN_SAMPLES = 3  # Minimum samples before using LSTM predictions
+ONLINE_LSTM_MIN_SAMPLES = 3
 
 
 def initialize_online_lstm():
@@ -358,22 +548,19 @@ def initialize_online_lstm():
     global online_lstm_model
     with online_lstm_lock:
         if online_lstm_model is None:
-            online_lstm_model = OnlineLSTMModel(
+            online_lstm_model = OnlineLSTMNumpy(
                 sequence_length=ONLINE_LSTM_SEQUENCE_LENGTH,
-                hidden_units=ONLINE_LSTM_HIDDEN_UNITS,
+                hidden_size=ONLINE_LSTM_HIDDEN_SIZE,
                 learning_rate=ONLINE_LSTM_LEARNING_RATE
             )
-            print(f"Online LSTM initialized: seq_len={ONLINE_LSTM_SEQUENCE_LENGTH}, "
-                  f"hidden={ONLINE_LSTM_HIDDEN_UNITS}, lr={ONLINE_LSTM_LEARNING_RATE}")
+            print(f"Online LSTM (NumPy) initialized: seq_len={ONLINE_LSTM_SEQUENCE_LENGTH}, "
+                  f"hidden={ONLINE_LSTM_HIDDEN_SIZE}, lr={ONLINE_LSTM_LEARNING_RATE}")
 
 
 def online_lstm_update(burst_time):
     """
     Update the Online LSTM with a new burst time observation.
     Called when a process completes.
-    
-    Args:
-        burst_time: The actual execution time of the completed process
     """
     global online_lstm_model
     
@@ -384,18 +571,15 @@ def online_lstm_update(burst_time):
             loss = online_lstm_model.partial_fit(burst_time)
             if loss is not None:
                 print(f"Online LSTM updated: burst_time={burst_time:.4f}, "
-                      f"loss={loss:.6f}, total_updates={online_lstm_model.total_updates}")
+                      f"loss={loss:.6f}, updates={online_lstm_model.total_updates}", flush=True)
         except Exception as e:
-            print(f"Online LSTM update error: {e}")
+            print(f"Online LSTM update error: {e}", flush=True)
 
 
 def get_burst_time_prediction_online_lstm():
     """
     Get burst time prediction using Online LSTM with OGD.
     Falls back to EWMA if not enough samples.
-    
-    Returns:
-        Predicted burst time
     """
     global online_lstm_model
     
@@ -404,15 +588,14 @@ def get_burst_time_prediction_online_lstm():
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
     
     if not history:
-        return 2.0  # Default if no history
+        return 2.0  # Default
     
     with online_lstm_lock:
-        # Try LSTM prediction if we have enough samples
         if online_lstm_model.n_samples >= ONLINE_LSTM_MIN_SAMPLES:
             lstm_pred = online_lstm_model.predict()
             
             if lstm_pred is not None and lstm_pred > 0:
-                # Blend with EWMA for robustness (70% LSTM, 30% EWMA)
+                # Blend with EWMA for robustness
                 ewma_pred = calculate_ewma(history)
                 blended_pred = 0.7 * lstm_pred + 0.3 * ewma_pred
                 return blended_pred
@@ -431,12 +614,12 @@ def get_burst_time_prediction_online_lstm():
 
 
 def reset_online_lstm():
-    """Reset the Online LSTM model (for new rounds/experiments)."""
+    """Reset the Online LSTM model."""
     global online_lstm_model
     with online_lstm_lock:
         if online_lstm_model is not None:
             online_lstm_model.reset()
-            print("Online LSTM model reset")
+            print("Online LSTM model reset", flush=True)
 
 
 # ============================================================================
@@ -446,34 +629,27 @@ def reset_online_lstm():
 
 # The function to update the core nums by request.
 def updateThread():
-    # Shared vaiable: numCores
     global numCores
 
-    # Bind to 0.0.0.0:5500
     myHost = '0.0.0.0'
     myPort = 5500
 
-    # Create a socket
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     serverSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     serverSocket.bind((myHost, myPort))
     serverSocket.listen(1)
 
-    # Handle request
     while True:
-        # Accept a connection
         (clientSocket, _) = serverSocket.accept()
         data_ = clientSocket.recv(1024)
         dataStr = data_.decode('UTF-8')
         dataStrList = dataStr.splitlines()
         message = json.loads(dataStrList[-1])
 
-        # Get the numCores and update the global variable
         numCores = message["numCores"]
         result = {"Response": "Ok"}
         msg = json.dumps(result)
 
-        # Send the result and close the socket
         response_headers = {
             'Content-Type': 'text/html; encoding=utf8',
             'Content-Length': len(msg),
@@ -516,15 +692,12 @@ def myFunction(data_, clientSocket_, arrival_time):
     except:
         pass
 
-    # Set the main function
     if numCoreFlag == False:
         result = actionModule.lambda_handler(message)
 
-        # Calculate turnaround time and add it to the response
         turnaround_time = time.time() - arrival_time
         result["turnaround_time"] = turnaround_time
 
-        # Send the result (Test Pid)
         result["myPID"] = os.getpid()
         msg = json.dumps(result)
 
@@ -539,27 +712,21 @@ def myFunction(data_, clientSocket_, arrival_time):
 
     response_proto = 'HTTP/1.1'
     response_status = '200'
-    response_status_text = 'OK'  # this can be random
+    response_status_text = 'OK'
 
-    # sending all this stuff
     r = '%s %s %s\r\n' % (response_proto, response_status,
                           response_status_text)
     
-    # CRITICAL SECTION: Block SIGTSTP during response sending to prevent
-    # preemption from interrupting socket writes and causing connection errors
     try:
-        # Block SIGTSTP to prevent preemption during response sending
         signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTSTP})
         
         clientSocket_.send(r.encode(encoding="utf-8"))
         clientSocket_.send(response_headers_raw.encode(encoding="utf-8"))
-        # to separate headers from body
         clientSocket_.send('\r\n'.encode(encoding="utf-8"))
         clientSocket_.send(msg.encode(encoding="utf-8"))
     except Exception as e:
         print(f"Error sending response: {e}", flush=True)
     finally:
-        # Unblock SIGTSTP after response is sent
         signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTSTP})
         try:
             clientSocket_.close()
@@ -567,52 +734,39 @@ def myFunction(data_, clientSocket_, arrival_time):
             pass
 
 
-# Fungsi EWMA (Exponential Weighted Moving Average)
 def calculate_ewma(history, alpha=0.8):
     if not history:
-        return 0  # Jika tidak ada data, kembalikan 0
-    ewma = history[0]  # Nilai awal
+        return 0
+    ewma = history[0]
     for val in history[1:]:
         ewma = alpha * val + (1 - alpha) * ewma
     return ewma
 
 
-# Parameter Mitigasi Ketidakpastian
-ALPHA_RT = 0.7  # Faktor koreksi waktu estimasi
-BETA_RT = 0.3   # Faktor penalti standar deviasi
+ALPHA_RT = 0.7
+BETA_RT = 0.3
 
 
-# Fungsi Menghitung Remaining Time - NOW USES ONLINE LSTM
 def calculate_remaining_time(pid):
-    """
-    Calculate remaining time using Online LSTM prediction with OGD.
-    Uses processExecutedTime to properly track accumulated execution time.
-    """
-    # Get prediction from Online LSTM model
+    """Calculate remaining time using Online LSTM prediction."""
     estimated_burst_time = get_burst_time_prediction_online_lstm()
     
-    # Calculate elapsed time using processExecutedTime (accumulated) + current running segment
     elapsed_time = processExecutedTime.get(pid, 0)
     if pid in processStartTime:
         elapsed_time += time.time() - processStartTime[pid]
     
-    # Remaining = total - elapsed
     remaining_time = max(estimated_burst_time - elapsed_time, 0)
     
     return remaining_time
 
 
 def calculate_total_wait_time(processQueue):
-    """
-    Calculate total wait time for all waiting processes
-    """
     total_wait_time = 0
     current_time = time.time()
 
     for process_item in processQueue:
         _, pid = process_item
         if pid in processTimestamps:
-            # Calculate individual wait time
             acc_wait, last_wait = processTimestamps[pid]
             individual_wait = acc_wait + (current_time - last_wait if last_wait else 0.0)
             total_wait_time += individual_wait
@@ -621,78 +775,56 @@ def calculate_total_wait_time(processQueue):
 
 
 def calculate_dynamic_beta(total_wait_time, num_tasks):
-    """
-    Calculate dynamic beta based on system-wide wait time characteristics
-    """
     if num_tasks == 0:
-        return 0.2  # Default fallback value
+        return 0.2
 
-    # Dynamic beta calculation
     dynamic_beta = total_wait_time / (num_tasks + 1)
 
-    # Normalization to prevent extreme values
     return min(max(dynamic_beta, 0.1), 1.0)
 
 
-# Batas waktu maksimum sebelum preemption terjadi (dalam detik)
 PREEMPTION_THRESHOLD = 4
 
 
 def waitTermination(childPid):
-    """
-    Menunggu proses selesai atau menggantinya jika ada proses lebih prioritas dengan preemption.
-    NOW INCLUDES ONLINE LSTM UPDATE when process completes.
-    """
+    """Wait for process completion and update Online LSTM."""
     global processQueue, mapPIDtoStatus
 
-    os.waitpid(childPid, 0)  # Tunggu hingga proses selesai
+    os.waitpid(childPid, 0)
 
     lockPIDMap.acquire()
 
     try:
-        # Hapus proses dari status map
         mapPIDtoStatus.pop(childPid, None)
 
-        # Calculate total burst time for this process
         total_executed = processExecutedTime.get(childPid, 0.0)
         if childPid in processStartTime:
             total_executed += time.time() - processStartTime[childPid]
         
-        # Store burst time to history (for fallback/EWMA)
         processExecutionHistory[FUNCTION_HISTORY_KEY].append(total_executed)
         
-        # ============================================================
-        # ONLINE LSTM UPDATE: Update model with completed process's burst time
-        # This is the key Online Gradient Descent step!
-        # ============================================================
+        # Update Online LSTM with completed process's burst time
         online_lstm_update(total_executed)
-        # ============================================================
         
-        # Clean up tracking structures for finished process
         processTimestamps.pop(childPid, None)
         processStartTime.pop(childPid, None)
         processExecutedTime.pop(childPid, None)
     except Exception as e:
         print(f"Error removing process {childPid}: {e}")
 
-    # PREEMPTION: Cek apakah ada proses dengan waktu tersisa lebih pendek dari proses yang berjalan
     if processQueue:
-        # Clean up stale PIDs from the queue before scheduling
         def is_process_alive(pid):
-            """Check if a process is still alive using /proc filesystem."""
             try:
                 return os.path.exists(f"/proc/{pid}")
             except Exception:
                 return False
         
-        # Filter out dead processes from the queue
         original_queue_size = len(processQueue)
         processQueue[:] = [
             (remaining_time, pid) for remaining_time, pid in processQueue
             if pid in mapPIDtoStatus and is_process_alive(pid)
         ]
         
-        # Also clean up mapPIDtoStatus for dead processes
         dead_pids = [pid for pid in mapPIDtoStatus if not is_process_alive(pid)]
         for dead_pid in dead_pids:
             mapPIDtoStatus.pop(dead_pid, None)
@@ -706,33 +838,27 @@ def waitTermination(childPid):
             except Exception:
                 pass
 
-        # Urutkan queue berdasarkan priority untuk SRTF
         def priority_selector(process_item):
             _, pid = process_item
             remaining_time = calculate_remaining_time(pid) + 1e-9
 
-            # Calculate individual wait time
             if pid in processTimestamps:
                 acc_wait, last_wait = processTimestamps[pid]
                 individual_wait_time = acc_wait + (time.time() - last_wait if last_wait else 0.0)
             else:
                 individual_wait_time = 0
 
-            # Calculate dynamic beta
             total_wait_time = calculate_total_wait_time(processQueue)
             dynamic_beta = calculate_dynamic_beta(
                 total_wait_time, len(processQueue))
 
-            # Alpha for remaining time (inverse priority)
             alpha = 0.8
 
-            # Priority calculation
             priority = (alpha * (1 / (remaining_time + 1e-9))) + \
                 (dynamic_beta * individual_wait_time)
 
             return priority
 
-        # Ambil proses dengan prioritas tertinggi
         next_process_candidates = sorted(
             processQueue, key=priority_selector, reverse=True)
 
@@ -740,19 +866,16 @@ def waitTermination(childPid):
             _, nextProcess = next_process_candidates[0]
             current_running_pid = None
 
-            # Cari proses yang sedang berjalan
             for pid, status in mapPIDtoStatus.items():
                 if status == "running":
                     current_running_pid = pid
                     break
 
-            # Jika ada proses yang sedang berjalan, cek apakah harus di-preempt
             if current_running_pid:
                 current_remaining = calculate_remaining_time(
                     current_running_pid)
                 next_remaining = calculate_remaining_time(nextProcess)
 
-                # PREEMPTION CHECK
                 if next_remaining < current_remaining - PREEMPTION_THRESHOLD:
                     print(f"Preempting process {current_running_pid} (remaining: {current_remaining:.2f}s) "
                           f"with process {nextProcess} (remaining: {next_remaining:.2f}s)")
@@ -775,7 +898,6 @@ def waitTermination(childPid):
                     except Exception as e:
                         print(f"Error stopping process {current_running_pid}: {e}")
 
-            # Jalankan proses dengan prioritas tertinggi
             removed = False
             for i, item in enumerate(processQueue):
                 if item[1] == nextProcess:
@@ -1071,11 +1193,12 @@ def handle_client_connection(clientSocket, address):
                 result["affinity_mask"] = list(affinity_mask)
                 result["numCores"] = numCores
                 
-                # Add Online LSTM stats to response
+                # Add Online LSTM stats
                 with online_lstm_lock:
                     if online_lstm_model is not None:
                         result["lstm_updates"] = online_lstm_model.total_updates
                         result["lstm_avg_loss"] = online_lstm_model.get_average_loss()
+                        result["lstm_samples"] = online_lstm_model.n_samples
                         result["lstm_learning_rate"] = online_lstm_model.learning_rate
                 
                 msg = json.dumps(result)
@@ -1083,10 +1206,9 @@ def handle_client_connection(clientSocket, address):
 
             if "Clear" in message:
                 responseMapWindows = []
-                # Reset execution history for round separation
                 processExecutionHistory[FUNCTION_HISTORY_KEY] = []
                 
-                # Reset Online LSTM model for new round
+                # Reset Online LSTM
                 reset_online_lstm()
                 
                 result = {"Response": "History and Online LSTM Reset"}
@@ -1116,10 +1238,7 @@ def handle_client_connection(clientSocket, address):
             clientSocket.close()
             return
 
-        # a status mark of whether the process can run based on the free resources
         waitForRunning = False
-
-        # The processes are running
         numIsRunning = 0
 
         lockPIDMap.acquire()
@@ -1127,30 +1246,25 @@ def handle_client_connection(clientSocket, address):
             if mapPIDtoStatus[child] == "running":
                 numIsRunning += 1
         if numIsRunning >= numCores:
-            waitForRunning = True  # The process need to wait for resources
+            waitForRunning = True
 
-        # slide windows
         if len(responseMapWindows) >= 100:
             responseMapWindows.pop(0)
 
         childProcess = os.fork()
         if childProcess == 0:
-            # Child process: run the function and exit
             myFunction(data_, clientSocket, time.time())
             os._exit(os.EX_OK)
         else:
-            # Append submit time to the responseMapWindows
             responseMapWindows.append([childProcess, [time.time(), -1]])
             processStartTime[childProcess] = time.time()
 
-            # store (accumulated_wait_seconds, last_wait_start_timestamp_or_None)
             processTimestamps[childProcess] = (0.0, None)
             
             if waitForRunning:
                 mapPIDtoStatus[childProcess] = "waiting"
                 os.kill(childProcess, signal.SIGTSTP)
 
-                # Push to priority queue using Online LSTM prediction
                 estimated_burst_time = calculate_remaining_time(childProcess)
                 heapq.heappush(processQueue, (estimated_burst_time, childProcess))
 
@@ -1163,7 +1277,6 @@ def handle_client_connection(clientSocket, address):
 
             lockPIDMap.release()
             
-            # Monitor child termination in separate thread
             threadWait = threading.Thread(target=waitTermination, args=(childProcess,))
             threadWait.daemon = True
             threadWait.start()
@@ -1187,7 +1300,6 @@ def run():
     global processQueue
     global processStartTime
 
-    # Set the core of mxcontainer
     numCores = 8
     os.sched_setaffinity(0, affinity_mask)
 
@@ -1195,40 +1307,32 @@ def run():
     
     # Initialize Online LSTM at startup
     initialize_online_lstm()
-    print("Online LSTM with Online Gradient Descent initialized")
+    print("Online LSTM with Online Gradient Descent (NumPy) initialized")
 
-    # Set the address and port
     myHost = '0.0.0.0'
     myPort = int(os.environ.get('PORT', 8081))
 
-    # Bind the address and port
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     serverSocket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     serverSocket.bind((myHost, myPort))
     serverSocket.listen(10)
 
-    # Set actionModule
     import app
     actionModule = app
 
-    # Set the signal handler
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Redirect the stdOut and stdErr
     phOut = PrintHook()
     phOut.Start(MyHookOut)
 
-    # Monitor numCore update
     threadUpdate = threading.Thread(target=updateThread)
     threadUpdate.daemon = True
     threadUpdate.start()
 
-    # Monitor I/O Block
     threadIntercept = threading.Thread(target=IOThread)
     threadIntercept.daemon = True
     threadIntercept.start()
 
-    # Accept connections and handle each in a separate thread
     while True:
         try:
             (clientSocket, address) = serverSocket.accept()
