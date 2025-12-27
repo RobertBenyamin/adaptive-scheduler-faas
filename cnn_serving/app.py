@@ -1,67 +1,61 @@
 import os
 import time
-import numpy as np
-from tensorflow.keras.applications import ResNet50
-from tensorflow.keras.preprocessing import image as keras_image
-from tensorflow.keras.applications.resnet50 import preprocess_input, decode_predictions
+from mxnet import gluon
+import mxnet as mx
 from storage_helper import download_file
 from dnld_blob import download_blob_new
 
 TMP_DIR = "/tmp/"
 
-# Global model - lazy loaded
-net = None
-
-def _initialize_model():
-    """Lazy initialization of ResNet50 model"""
-    global net
-    
-    if net is None:
-        print("Loading ResNet50 model...", flush=True)
-        net = ResNet50(weights='imagenet')
-        print("Model loaded successfully", flush=True)
+net = gluon.model_zoo.vision.resnet50_v1(pretrained=True, root = TMP_DIR)
+net.hybridize(static_alloc=True, static_shape=True)
+lblPath = gluon.utils.download('https://raw.githubusercontent.com/shicai/MobileNet-Caffe/refs/heads/master/synset.txt',path=TMP_DIR)
+with open(lblPath, 'r') as f:
+    labels = [l.rstrip() for l in f]
 
 def lambda_handler(event):
-    # Initialize model on first call
-    _initialize_model()
-    
     blobName = event.get("input_file", "img10.jpg")
+    
     pid = str(os.getpid())
+
     base = os.path.basename(blobName)
     name, ext = os.path.splitext(base)
     proc_blob_name = f"{name}_{pid}{ext}"
     local_file_path = os.path.join(TMP_DIR, proc_blob_name)
-    
+
     # Request centralized IO server to fetch the object for this pid
     try:
-        download_blob_new(blobName)
+        download_blob_new(blobName)  # send request; performIO will write proc file into /tmp
+        # small wait to allow IO thread to write file (performIO returns after writing/OK)
         timeout = 2.0
         t0 = time.time()
         while not os.path.exists(local_file_path) and (time.time() - t0) < timeout:
             time.sleep(0.01)
         if not os.path.exists(local_file_path):
+            # fallback to direct download if centralized IO failed
             download_file(blobName, local_file_path)
     except Exception:
+        # fallback to direct download
         download_file(blobName, local_file_path)
-    
-    # Load and preprocess image using Keras/TensorFlow
-    img = keras_image.load_img(local_file_path, target_size=(224, 224))
-    img_array = keras_image.img_to_array(img)
-    img_array = np.expand_dims(img_array, axis=0)
-    img_array = preprocess_input(img_array)
-    
-    # Make prediction
-    preds = net.predict(img_array, verbose=0)
-    
-    # Decode predictions (top 5)
-    decoded = decode_predictions(preds, top=5)[0]
-    
-    # Format output similar to original
+
+    # format image as (batch, RGB, width, height)
+    img = mx.image.imread(local_file_path)
+    img = mx.image.imresize(img, 224, 224) # resize
+    img = mx.image.color_normalize(img.astype(dtype='float32')/255,
+                                mean=mx.nd.array([0.485, 0.456, 0.406]),
+                                std=mx.nd.array([0.229, 0.224, 0.225])) # normalize
+    img = img.transpose((2, 0, 1)) # channel first
+    img = img.expand_dims(axis=0) # batchify
+
+    prob = net(img).softmax() # predict and normalize output
+    idx = prob.topk(k=5)[0] # get top 5 result
     inference = ''
-    for _, label, prob in decoded:
-        inference += f'With prob = {prob:.5f}, it contains {label}. '
+    for i in idx:
+        i = int(i.asscalar())
+        # print('With prob = %.5f, it contains %s' % (prob[0,i].asscalar(), labels[i]))
+        inference = inference + 'With prob = %.5f, it contains %s' % (prob[0,i].asscalar(), labels[i]) + '. '
+        # inference = inference + 'With prob = %.5f, it contains ' % (prob[0,i].asscalar()) + '. '
     
-    # Clean up temp file
     try:
         if os.path.exists(local_file_path):
             os.remove(local_file_path)
