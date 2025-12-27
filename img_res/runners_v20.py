@@ -200,7 +200,7 @@ responseMapWindows = []  # map from pid to response
 numCores = 8
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
-online_lstm = OnlineLSTM(sequence_length=3)
+online_lstm = None
 
 
 # The function to update the core nums by request.
@@ -942,6 +942,9 @@ def run():
     global affinity_mask
     global processQueue
     global processStartTime
+    global online_lstm
+
+    online_lstm = OnlineLSTM(sequence_length=3)
 
     # Set the core of mxcontainer
     numCores = 8
