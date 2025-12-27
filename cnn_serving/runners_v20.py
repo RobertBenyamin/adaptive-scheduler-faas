@@ -966,6 +966,10 @@ def run():
     import app
     actionModule = app
 
+    print("Pre-loading ResNet50 model in parent process...", flush=True)
+    app._initialize_model()
+    print("Model pre-loaded successfully!", flush=True)
+
     # Set the signal handler
     signal.signal(signal.SIGINT, signal_handler)
 
