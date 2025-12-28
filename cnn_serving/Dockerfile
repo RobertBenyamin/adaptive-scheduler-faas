@@ -3,7 +3,7 @@ FROM jovanvr97/cnn_serve_start
 WORKDIR /app/pythonAction
 
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis numpy==1.23.5 jsonpickle boto3 Flask
+RUN pip install --no-cache-dir sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis jsonpickle boto3 Flask
 # Use tensorflow-cpu to avoid CUDA/driver issues
 # RUN pip install tensorflow-cpu==2.12.0
 
@@ -11,6 +11,9 @@ RUN pip install --no-cache-dir \
     river==0.14.0 \
     deep-river==0.2.0
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
+RUN pip install --no-cache-dir --force-reinstall numpy==1.23.5
+
 ENV FORCE_CPU=1
 
 # Set TensorFlow environment variables
