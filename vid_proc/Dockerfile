@@ -8,9 +8,9 @@ RUN pip install --no-cache-dir sockets pickle-mixin requests psutil js2py JPype1
 # RUN pip install tensorflow-cpu==2.12.0
 
 RUN pip install --no-cache-dir \
-    river \
-    deep-river==0.2.7 \
-    torch --index-url https://download.pytorch.org/whl/cpu
+    river==0.14.0 \
+    deep-river==0.2.7
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 ENV FORCE_CPU=1
 
 # Set TensorFlow environment variables
