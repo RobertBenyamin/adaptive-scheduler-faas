@@ -123,6 +123,8 @@ affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 # ============================================================================
 # ONLINE LSTM WITH ONLINE GRADIENT DESCENT (OGD) - FORK-SAFE IMPLEMENTATION
 # Uses NumPy-based LSTM to avoid TensorFlow fork issues
+# With Fix 1 (Mini-Batch Experience Replay), Fix 4 (EMA Normalization), 
+# Fix 5 (Lower LR with Warmup)
 # ============================================================================
 
 class OnlineLSTMNumpy:
@@ -130,29 +132,40 @@ class OnlineLSTMNumpy:
     Online LSTM implemented in pure NumPy for fork-safety.
     Updates weights incrementally using Online Gradient Descent.
     
-    This avoids TensorFlow's fork-unsafety issues completely.
+    Includes:
+    - Fix 1: Mini-batch learning with experience replay
+    - Fix 4: Stabilized normalization using EMA
+    - Fix 5: Lower learning rate with warmup schedule
     """
     
-    def __init__(self, sequence_length=3, hidden_size=8, learning_rate=0.01):
+    def __init__(self, sequence_length=3, hidden_size=8, learning_rate=0.001):
         self.sequence_length = sequence_length
         self.hidden_size = hidden_size
         self.input_size = 1
         self.output_size = 1
-        self.initial_learning_rate = learning_rate
+        self.initial_learning_rate = learning_rate  # Fix 5: Store initial LR
         self.learning_rate = learning_rate
         
         # Initialize LSTM weights using Xavier initialization
         self._init_weights()
         
-        # Sequence buffer for online learning
-        self.sequence_buffer = deque(maxlen=sequence_length + 1)
+        # Fix 1: Experience replay buffer (stores raw values)
+        self.replay_buffer = deque(maxlen=50)  # REPLAY_BUFFER_SIZE
+        self.mini_batch_size = 8  # MINI_BATCH_SIZE
+        self.update_frequency = 4  # UPDATE_FREQUENCY
+        self.sample_count = 0  # Count samples for update frequency
         
-        # Running statistics for online normalization (Welford's algorithm)
-        self.running_mean = 0.0
-        self.running_var = 1.0
+        # Sequence buffer for prediction (stores normalized values)
+        self.sequence_buffer = deque(maxlen=sequence_length)
+        
+        # Fix 4: EMA-based normalization statistics
         self.n_samples = 0
-        self.min_val = float('inf')
-        self.max_val = float('-inf')
+        self.ema_alpha = 0.1  # EMA smoothing factor
+        self.ema_min = None
+        self.ema_max = None
+        self.min_val = 0.0
+        self.max_val = 1.0
+        self.range_padding = 0.2  # 20% padding on range
         
         # Hidden and cell states (maintained across predictions for true online learning)
         self.h = np.zeros((1, hidden_size))
@@ -162,9 +175,10 @@ class OnlineLSTMNumpy:
         self.total_updates = 0
         self.cumulative_loss = 0.0
         
-        # Learning rate decay
-        self.decay_rate = 0.999
-        self.min_learning_rate = 0.001
+        # Fix 5: Learning rate schedule parameters
+        self.warmup_steps = 10
+        self.decay_rate = 0.995
+        self.min_learning_rate = 0.0001
         
         # Gradient clipping threshold
         self.clip_value = 1.0
@@ -207,8 +221,8 @@ class OnlineLSTMNumpy:
     def _sigmoid(self, x):
         """Numerically stable sigmoid."""
         return np.where(x >= 0, 
-                       1 / (1 + np.exp(-x)), 
-                       np.exp(x) / (1 + np.exp(x)))
+                       1 / (1 + np.exp(-np.clip(x, -500, 500))), 
+                       np.exp(np.clip(x, -500, 500)) / (1 + np.exp(np.clip(x, -500, 500))))
     
     def _sigmoid_derivative(self, s):
         """Derivative of sigmoid given sigmoid output."""
@@ -252,12 +266,12 @@ class OnlineLSTMNumpy:
             # Split gates
             i_t = self._sigmoid(gates[:, :h])           # Input gate
             f_t = self._sigmoid(gates[:, h:2*h])        # Forget gate
-            g_t = np.tanh(gates[:, 2*h:3*h])            # Cell gate
+            g_t = np.tanh(np.clip(gates[:, 2*h:3*h], -500, 500))  # Cell gate
             o_t = self._sigmoid(gates[:, 3*h:])         # Output gate
             
             # Update cell and hidden state
             c_t = f_t * c_t + i_t * g_t
-            h_t = o_t * np.tanh(c_t)
+            h_t = o_t * np.tanh(np.clip(c_t, -500, 500))
             
             # Store cache
             cache['x'].append(x_t)
@@ -317,7 +331,7 @@ class OnlineLSTMNumpy:
             o_t = cache['o'][t]
             
             # Gradient through output gate
-            tanh_c = np.tanh(c_t)
+            tanh_c = np.tanh(np.clip(c_t, -500, 500))
             do = dh_next * tanh_c
             do_gate = do * self._sigmoid_derivative(o_t)
             
@@ -361,9 +375,24 @@ class OnlineLSTMNumpy:
             gradients[key] = np.clip(gradients[key], -self.clip_value, self.clip_value)
         return gradients
     
+    def _get_learning_rate(self):
+        """
+        Fix 5: Learning rate schedule with warmup and decay.
+        """
+        if self.total_updates < self.warmup_steps:
+            # Linear warmup
+            warmup_factor = (self.total_updates + 1) / self.warmup_steps
+            return self.initial_learning_rate * warmup_factor
+        else:
+            # Exponential decay after warmup
+            decay_steps = self.total_updates - self.warmup_steps
+            decayed_lr = self.initial_learning_rate * (self.decay_rate ** decay_steps)
+            return max(decayed_lr, self.min_learning_rate)
+    
     def _adam_update(self, gradients):
-        """Apply Adam optimizer update."""
+        """Apply Adam optimizer update with scheduled learning rate."""
         self.t += 1
+        self.learning_rate = self._get_learning_rate()  # Fix 5: Update learning rate
         
         params = {
             'W_ih': self.W_ih, 'W_hh': self.W_hh,
@@ -394,91 +423,191 @@ class OnlineLSTMNumpy:
         self.b_hh = params['b_hh']
         self.W_out = params['W_out']
         self.b_out = params['b_out']
+        
+        self.total_updates += 1
     
     def _update_running_stats(self, value):
-        """Update running statistics for online normalization."""
+        """
+        Fix 4: Update normalization statistics using EMA for stability.
+        """
         self.n_samples += 1
         
-        # Update min/max
-        self.min_val = min(self.min_val, value)
-        self.max_val = max(self.max_val, value)
+        if self.ema_min is None:
+            # First sample - initialize EMA values
+            self.ema_min = value
+            self.ema_max = value
+        else:
+            # Update EMA min (only update aggressively if new value is lower)
+            if value < self.ema_min:
+                self.ema_min = self.ema_alpha * value + (1 - self.ema_alpha) * self.ema_min
+            else:
+                # Slowly drift min upward if values are consistently higher
+                self.ema_min = 0.01 * value + 0.99 * self.ema_min
+            
+            # Update EMA max (only update aggressively if new value is higher)
+            if value > self.ema_max:
+                self.ema_max = self.ema_alpha * value + (1 - self.ema_alpha) * self.ema_max
+            else:
+                # Slowly drift max downward if values are consistently lower
+                self.ema_max = 0.01 * value + 0.99 * self.ema_max
         
-        # Welford's online algorithm
-        delta = value - self.running_mean
-        self.running_mean += delta / self.n_samples
-        delta2 = value - self.running_mean
-        self.running_var += (delta * delta2 - self.running_var) / self.n_samples
+        # Ensure min < max with minimum range
+        if self.ema_max <= self.ema_min:
+            self.ema_max = self.ema_min + 0.1
+        
+        # Apply padding to handle outliers
+        range_size = self.ema_max - self.ema_min
+        self.min_val = self.ema_min - range_size * self.range_padding
+        self.max_val = self.ema_max + range_size * self.range_padding
+        
+        # Ensure min_val is not negative for burst times
+        self.min_val = max(0, self.min_val)
         
     def _normalize(self, value):
-        """Normalize a value using min-max scaling."""
-        if self.max_val == self.min_val:
+        """Normalize a value using stabilized min-max scaling."""
+        if self.max_val - self.min_val < 1e-8:
             return 0.5
-        return (value - self.min_val) / (self.max_val - self.min_val + 1e-8)
+        normalized = (value - self.min_val) / (self.max_val - self.min_val)
+        return np.clip(normalized, 0.0, 1.0)
     
     def _denormalize(self, value):
         """Denormalize a value back to original scale."""
-        if self.max_val == self.min_val:
-            return self.running_mean
         return value * (self.max_val - self.min_val) + self.min_val
     
-    def _decay_learning_rate(self):
-        """Apply learning rate decay."""
-        self.learning_rate = max(
-            self.learning_rate * self.decay_rate,
-            self.min_learning_rate
-        )
+    def _compute_gradients_for_sequence(self, sequence, target):
+        """
+        Fix 1: Compute gradients for a single sequence-target pair.
+        Used for mini-batch gradient averaging.
+        """
+        # Normalize sequence and target
+        norm_sequence = [self._normalize(v) for v in sequence]
+        norm_target = np.array([[self._normalize(target)]], dtype=np.float32)
+        
+        # Prepare input
+        X_seq = np.array(norm_sequence, dtype=np.float32).reshape(-1, 1)
+        
+        # Forward pass with cache
+        output, cache = self._lstm_forward(X_seq, return_cache=True)
+        
+        # Compute loss for this sample
+        loss = float(np.mean((output - norm_target) ** 2))
+        
+        # Backward pass
+        d_output = 2 * (output - norm_target) / output.size
+        gradients = self._lstm_backward(d_output, cache)
+        
+        return gradients, loss
+    
+    def _sample_mini_batch(self):
+        """
+        Fix 1: Sample mini-batch sequences from replay buffer.
+        Returns list of (sequence, target) tuples.
+        """
+        buffer_list = list(self.replay_buffer)
+        buffer_len = len(buffer_list)
+        
+        # Need at least sequence_length + 1 samples to form one training example
+        if buffer_len < self.sequence_length + 1:
+            return []
+        
+        # Calculate how many valid starting positions we have
+        max_start_idx = buffer_len - self.sequence_length - 1
+        
+        # Determine actual batch size (might be smaller than desired)
+        actual_batch_size = min(self.mini_batch_size, max_start_idx + 1)
+        
+        if actual_batch_size <= 0:
+            return []
+        
+        # Sample random starting indices without replacement
+        if actual_batch_size >= max_start_idx + 1:
+            # Use all available indices
+            start_indices = list(range(max_start_idx + 1))
+        else:
+            start_indices = np.random.choice(
+                max_start_idx + 1, 
+                size=actual_batch_size, 
+                replace=False
+            )
+        
+        # Extract sequences and targets
+        mini_batch = []
+        for idx in start_indices:
+            sequence = buffer_list[idx:idx + self.sequence_length]
+            target = buffer_list[idx + self.sequence_length]
+            mini_batch.append((sequence, target))
+        
+        return mini_batch
     
     def partial_fit(self, new_value):
         """
         Online learning: update model with a single new observation.
-        This implements Online Gradient Descent for LSTM.
+        
+        Fix 1: Uses experience replay buffer and mini-batch updates
+        Fix 4: Uses stable EMA-based normalization
+        Fix 5: Uses learning rate schedule with warmup
         
         Args:
             new_value: The new burst time observation
             
         Returns:
-            loss: The loss for this update (None if not enough data)
+            loss: The average loss for this update (None if not enough data)
         """
-        # Update running statistics
+        # Fix 4: Update normalization statistics using EMA
         self._update_running_stats(new_value)
         
-        # Normalize and add to buffer
+        # Fix 1: Add to replay buffer (store raw values)
+        self.replay_buffer.append(new_value)
+        
+        # Also maintain sequence buffer for prediction (normalized)
         normalized_value = self._normalize(new_value)
         self.sequence_buffer.append(normalized_value)
         
-        # Need at least sequence_length + 1 samples to train
-        if len(self.sequence_buffer) < self.sequence_length + 1:
+        self.sample_count += 1
+        
+        # Fix 1: Only update on schedule and when we have enough samples
+        if self.sample_count % self.update_frequency != 0:
+            return None  # Skip update this round
+        
+        if len(self.replay_buffer) < self.sequence_length + 1:
+            return None  # Not enough data yet
+        
+        # Fix 1: Sample mini-batch from replay buffer
+        mini_batch = self._sample_mini_batch()
+        
+        if len(mini_batch) == 0:
             return None
         
-        # Prepare training data
-        buffer_list = list(self.sequence_buffer)
-        X_seq = np.array(buffer_list[:-1], dtype=np.float32).reshape(-1, 1)
-        y_target = np.array([[buffer_list[-1]]], dtype=np.float32)
+        # Compute averaged gradients over mini-batch
+        total_gradients = None
+        total_loss = 0.0
         
-        # Forward pass with cache
-        output, cache = self._lstm_forward(X_seq, return_cache=True)
+        for sequence, target in mini_batch:
+            gradients, loss = self._compute_gradients_for_sequence(sequence, target)
+            total_loss += loss
+            
+            if total_gradients is None:
+                total_gradients = {k: v.copy() for k, v in gradients.items()}
+            else:
+                for key in gradients:
+                    total_gradients[key] += gradients[key]
         
-        # Compute MSE loss
-        loss = float(np.mean((output - y_target) ** 2))
-        
-        # Backward pass
-        d_output = 2 * (output - y_target) / output.size  # MSE gradient
-        gradients = self._lstm_backward(d_output, cache)
+        # Average gradients
+        batch_size = len(mini_batch)
+        for key in total_gradients:
+            total_gradients[key] /= batch_size
         
         # Clip gradients
-        gradients = self._clip_gradients(gradients)
+        total_gradients = self._clip_gradients(total_gradients)
         
-        # Apply Adam update (Online Gradient Descent step)
-        self._adam_update(gradients)
+        # Apply Adam update with averaged gradients (Fix 5: uses scheduled LR)
+        self._adam_update(total_gradients)
         
         # Update metrics
-        self.total_updates += 1
-        self.cumulative_loss += loss
+        avg_loss = total_loss / batch_size
+        self.cumulative_loss += avg_loss
         
-        # Decay learning rate
-        self._decay_learning_rate()
-        
-        return loss
+        return avg_loss
     
     def predict(self):
         """
@@ -491,7 +620,7 @@ class OnlineLSTMNumpy:
             return None
         
         try:
-            # Get last sequence_length values
+            # Get last sequence_length values (already normalized in buffer)
             buffer_list = list(self.sequence_buffer)
             X_seq = np.array(buffer_list[-self.sequence_length:], dtype=np.float32).reshape(-1, 1)
             
@@ -501,7 +630,7 @@ class OnlineLSTMNumpy:
             # Denormalize
             prediction = self._denormalize(float(output[0, 0]))
             
-            return max(prediction, 0.0)
+            return max(prediction, 0.001)
             
         except Exception as e:
             print(f"Online LSTM prediction error: {e}")
@@ -513,19 +642,38 @@ class OnlineLSTMNumpy:
             return 0.0
         return self.cumulative_loss / self.total_updates
     
+    def get_stats(self):
+        """Return model statistics for monitoring."""
+        return {
+            'n_samples': self.n_samples,
+            'total_updates': self.total_updates,
+            'current_lr': self._get_learning_rate(),
+            'replay_buffer_size': len(self.replay_buffer),
+            'min_val': self.min_val,
+            'max_val': self.max_val,
+            'ema_min': self.ema_min,
+            'ema_max': self.ema_max,
+            'avg_loss': self.get_average_loss()
+        }
+    
     def reset(self):
         """Reset model for a new round."""
         self._init_weights()
+        self.replay_buffer.clear()  # Fix 1: Clear replay buffer
         self.sequence_buffer.clear()
-        self.running_mean = 0.0
-        self.running_var = 1.0
+        
+        # Fix 4: Reset EMA normalization stats
         self.n_samples = 0
-        self.min_val = float('inf')
-        self.max_val = float('-inf')
+        self.ema_min = None
+        self.ema_max = None
+        self.min_val = 0.0
+        self.max_val = 1.0
+        
         self.h = np.zeros((1, self.hidden_size))
         self.c = np.zeros((1, self.hidden_size))
         self.total_updates = 0
         self.cumulative_loss = 0.0
+        self.sample_count = 0  # Fix 1: Reset sample count
         self.learning_rate = self.initial_learning_rate
         self.m = {}
         self.v = {}
@@ -536,10 +684,10 @@ class OnlineLSTMNumpy:
 online_lstm_model = None
 online_lstm_lock = threading.Lock()
 
-# Configuration
+# Configuration - Fix 5: Lower initial learning rate
 ONLINE_LSTM_SEQUENCE_LENGTH = 3
 ONLINE_LSTM_HIDDEN_SIZE = 8
-ONLINE_LSTM_LEARNING_RATE = 0.01
+ONLINE_LSTM_LEARNING_RATE = 0.001  # Fix 5: Reduced from 0.01 to 0.001
 ONLINE_LSTM_MIN_SAMPLES = 3
 
 
@@ -553,8 +701,10 @@ def initialize_online_lstm():
                 hidden_size=ONLINE_LSTM_HIDDEN_SIZE,
                 learning_rate=ONLINE_LSTM_LEARNING_RATE
             )
-            print(f"Online LSTM (NumPy) initialized: seq_len={ONLINE_LSTM_SEQUENCE_LENGTH}, "
-                  f"hidden={ONLINE_LSTM_HIDDEN_SIZE}, lr={ONLINE_LSTM_LEARNING_RATE}")
+            print(f"Online LSTM (NumPy) initialized with fixes: seq_len={ONLINE_LSTM_SEQUENCE_LENGTH}, "
+                  f"hidden={ONLINE_LSTM_HIDDEN_SIZE}, lr={ONLINE_LSTM_LEARNING_RATE}, "
+                  f"mini_batch={online_lstm_model.mini_batch_size}, "
+                  f"update_freq={online_lstm_model.update_frequency}")
 
 
 def online_lstm_update(burst_time):
@@ -570,8 +720,10 @@ def online_lstm_update(burst_time):
         try:
             loss = online_lstm_model.partial_fit(burst_time)
             if loss is not None:
+                stats = online_lstm_model.get_stats()
                 print(f"Online LSTM updated: burst_time={burst_time:.4f}, "
-                      f"loss={loss:.6f}, updates={online_lstm_model.total_updates}", flush=True)
+                      f"loss={loss:.6f}, updates={stats['total_updates']}, "
+                      f"lr={stats['current_lr']:.6f}, buffer={stats['replay_buffer_size']}", flush=True)
         except Exception as e:
             print(f"Online LSTM update error: {e}", flush=True)
 
@@ -597,8 +749,12 @@ def get_burst_time_prediction_online_lstm():
             if lstm_pred is not None and lstm_pred > 0:
                 # Blend with EWMA for robustness
                 ewma_pred = calculate_ewma(history)
-                blended_pred = 0.7 * lstm_pred + 0.3 * ewma_pred
-                return blended_pred
+                
+                # Weight LSTM more as we get more training updates
+                # Start at 50% LSTM, increase to 90% over time
+                lstm_weight = min(0.9, 0.5 + online_lstm_model.total_updates * 0.01)
+                blended_pred = lstm_weight * lstm_pred + (1 - lstm_weight) * ewma_pred
+                return max(0.001, blended_pred)
     
     # Fallback to EWMA/mean
     if len(history) >= 3:
@@ -1196,10 +1352,12 @@ def handle_client_connection(clientSocket, address):
                 # Add Online LSTM stats
                 with online_lstm_lock:
                     if online_lstm_model is not None:
-                        result["lstm_updates"] = online_lstm_model.total_updates
-                        result["lstm_avg_loss"] = online_lstm_model.get_average_loss()
-                        result["lstm_samples"] = online_lstm_model.n_samples
-                        result["lstm_learning_rate"] = online_lstm_model.learning_rate
+                        stats = online_lstm_model.get_stats()
+                        result["lstm_updates"] = stats['total_updates']
+                        result["lstm_avg_loss"] = stats['avg_loss']
+                        result["lstm_samples"] = stats['n_samples']
+                        result["lstm_learning_rate"] = stats['current_lr']
+                        result["lstm_replay_buffer"] = stats['replay_buffer_size']
                 
                 msg = json.dumps(result)
                 responseFlag = True
@@ -1307,7 +1465,7 @@ def run():
     
     # Initialize Online LSTM at startup
     initialize_online_lstm()
-    print("Online LSTM with Online Gradient Descent (NumPy) initialized")
+    print("Online LSTM with Fix 1 (Mini-Batch), Fix 4 (EMA Norm), Fix 5 (LR Schedule) initialized")
 
     myHost = '0.0.0.0'
     myPort = int(os.environ.get('PORT', 8081))
