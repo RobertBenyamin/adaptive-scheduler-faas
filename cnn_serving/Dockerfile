@@ -3,7 +3,7 @@ FROM jovanvr97/cnn_serve_start
 WORKDIR /app/pythonAction
 
 RUN pip install --upgrade pip
-RUN pip install --no-cache-dir sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis "numpy<1.24" jsonpickle boto3 Flask
+RUN pip install --no-cache-dir sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis numpy==1.23.5 jsonpickle boto3 Flask
 # Use tensorflow-cpu to avoid CUDA/driver issues
 # RUN pip install tensorflow-cpu==2.12.0
 
