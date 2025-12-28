@@ -5,7 +5,13 @@ WORKDIR /app/pythonAction
 RUN pip install --upgrade pip
 RUN pip install --no-cache-dir sockets pickle-mixin requests psutil js2py JPype1==1.5.1 redis Flask "numpy<1.24" jsonpickle boto3
 # Use tensorflow-cpu to avoid CUDA/driver issues
-RUN pip install tensorflow-cpu==2.12.0
+# RUN pip install tensorflow-cpu==2.12.0
+
+RUN pip install --no-cache-dir \
+    river==0.14.0 \
+    deep-river==0.2.7 \
+    torch --index-url https://download.pytorch.org/whl/cpu
+ENV FORCE_CPU=1
 
 # Set TensorFlow environment variables
 ENV TF_CPP_MIN_LOG_LEVEL=2
