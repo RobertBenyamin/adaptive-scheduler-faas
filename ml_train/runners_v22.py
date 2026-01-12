@@ -160,7 +160,7 @@ affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
 # Online model instance
 model_lock = threading.Lock()
-online_model = OnlineLSTMManager(seq_len=2)
+online_model = OnlineLSTMManager(seq_len=3)
 
 
 # The function to update the core nums by request.
