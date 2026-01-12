@@ -22,17 +22,12 @@ def signal_handler(sig, frame):
     serverSocket_.close()
     sys.exit(0)
 
-# 19v2 - Improved version with hybrid fallback and better cold start handling
 class AdaptiveRandomForest:
     def __init__(self):
-        # Using AdaptiveRandomForestRegressor from River (river 0.14.0 API)
-        # Implements Hoeffding Trees + ADWIN (Drift Detection) internally
         self.model = ensemble.AdaptiveRandomForestRegressor(
-            n_models=15,      # Increased from 10 for better ensemble stability
+            n_models=15,
             seed=42,
-            # Reduced from 50 for faster adaptation in FaaS environment
             grace_period=10,
-            # Less sensitive drift detector (was 0.002)
             drift_detector=drift.ADWIN(delta=0.01)
         )
         self.last_arrival_time = 0
@@ -67,11 +62,9 @@ class AdaptiveRandomForest:
         """
         Transform raw history into features
         Features: Lags, Window Stats, Volatility, Delta, Inter-Arrival
-        Now handles cold start more gracefully with available data
         """
         n = len(history)
         
-        # Use available data even if less than 10
         if n == 0:
             return {
                 "lag_1": 0, "lag_2": 0, "lag_3": 0,
@@ -359,7 +352,7 @@ def myFunction(data_, clientSocket_, arrival_time):
     r = '%s %s %s\r\n' % (response_proto, response_status,
                           response_status_text)
     
-    # CRITICAL SECTION: Block SIGTSTP during response sending to prevent
+    # Block SIGTSTP during response sending to prevent
     # preemption from interrupting socket writes and causing connection errors
     try:
         # Block SIGTSTP to prevent preemption during response sending
@@ -382,10 +375,6 @@ def myFunction(data_, clientSocket_, arrival_time):
 
 
 def get_burst_time_prediction():
-    """
-    Get burst time prediction using ARF (stream-based, no caching needed).
-    The model is already incremental, so prediction is O(depth).
-    """
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
 
     with model_lock:
@@ -396,9 +385,6 @@ def get_burst_time_prediction():
 
 # Function to calculate Remaining Time
 def calculate_remaining_time(pid):
-    """
-    Calculate remaining time using ARF prediction.
-    """
     # Get prediction from stream-based model
     estimated_burst_time = get_burst_time_prediction()
 
