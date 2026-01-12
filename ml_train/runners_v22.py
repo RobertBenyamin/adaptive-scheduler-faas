@@ -29,22 +29,17 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 class LSTMModule(nn.Module):
-    """Standard PyTorch LSTM for Regression"""
     def __init__(self, n_features, hidden_size=8):
         super().__init__()
         self.lstm = nn.LSTM(input_size=n_features, hidden_size=hidden_size, batch_first=True)
         self.fc = nn.Linear(hidden_size, 1)
 
     def forward(self, x):
-        # x shape provided by deep-river: (batch, seq_len, n_features)
         out, _ = self.lstm(x)
-        # We take the output of the last time step
         return self.fc(out[:, -1, :])
 
 class OnlineLSTMManager:
-    """Wrapper using deep-river for Incremental Learning"""
     def __init__(self, seq_len=3):
-        # The RollingRegressor maintains the sliding window history internally
         self.model = compose.Pipeline(
             preprocessing.StandardScaler(),
             regression.RollingRegressor(
@@ -53,13 +48,12 @@ class OnlineLSTMManager:
                 optimizer=torch.optim.Adam,
                 lr=0.01,
                 window_size=seq_len,
-                n_features=8 # Matches your 8 feature set
+                n_features=8
             )
         )
         self.samples_learned = 0
 
     def predict(self, features):
-        # If no samples learned yet, return a safe default
         if self.samples_learned < 1:
             return 2.0
         return self.model.predict_one(features)
@@ -264,10 +258,7 @@ def myFunction(data_, clientSocket_, arrival_time):
     r = '%s %s %s\r\n' % (response_proto, response_status,
                           response_status_text)
     
-    # CRITICAL SECTION: Block SIGTSTP during response sending to prevent
-    # preemption from interrupting socket writes and causing connection errors
     try:
-        # Block SIGTSTP to prevent preemption during response sending
         signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTSTP})
         
         clientSocket_.send(r.encode(encoding="utf-8"))
@@ -278,7 +269,6 @@ def myFunction(data_, clientSocket_, arrival_time):
     except Exception as e:
         print(f"Error sending response: {e}", flush=True)
     finally:
-        # Unblock SIGTSTP after response is sent
         signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGTSTP})
         try:
             clientSocket_.close()
@@ -309,7 +299,6 @@ def get_burst_time_prediction():
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
 
     with model_lock:
-        # Use simple mean for very early cold-start
         if len(history) < 5:
             return np.mean(history) if history else 2.0
         
@@ -319,36 +308,25 @@ def get_burst_time_prediction():
     return prediction if prediction is not None else 2.0
 
 
-# Function to calculate Remaining Time
 def calculate_remaining_time(pid):
-    """
-    Calculate remaining time.
-    """
-    # Get prediction from stream-based model
     estimated_burst_time = get_burst_time_prediction()
 
-    # Calculate elapsed time
     elapsed_time = processExecutedTime.get(pid, 0)
     if pid in processStartTime:
         elapsed_time += time.time() - processStartTime[pid]
 
-    # Remaining = total - elapsed
     remaining_time = max(estimated_burst_time - elapsed_time, 0)
 
     return remaining_time
 
 
 def calculate_total_wait_time(processQueue):
-    """
-    Calculate total wait time for all waiting processes
-    """
     total_wait_time = 0
     current_time = time.time()
 
     for process_item in processQueue:
         _, pid = process_item
         if pid in processTimestamps:
-            # Calculate individual wait time
             acc_wait, last_wait = processTimestamps[pid]
             individual_wait = acc_wait + \
                 (current_time - last_wait if last_wait else 0.0)
@@ -358,62 +336,45 @@ def calculate_total_wait_time(processQueue):
 
 
 def calculate_dynamic_beta(total_wait_time, num_tasks):
-    """
-    Calculate dynamic beta based on system-wide wait time characteristics
-    """
     if num_tasks == 0:
-        return 0.2  # Default fallback value
+        return 0.2
 
-    # Dynamic beta calculation
     dynamic_beta = total_wait_time / (num_tasks + 1)
 
-    # Normalization to prevent extreme values
     return min(max(dynamic_beta, 0.1), 1.0)
 
 
-# Maximum time threshold before preemption occurs (in seconds)
 PREEMPTION_THRESHOLD = 4
 
 
 def waitTermination(childPid):
-    """
-    Wait for process to finish or replace it if there's a higher priority process with preemption.
-    """
     global processQueue, mapPIDtoStatus
 
-    os.waitpid(childPid, 0)  # Wait until process finishes
+    os.waitpid(childPid, 0)
 
     lockPIDMap.acquire()
 
     try:
-        # Remove process from status map
         mapPIDtoStatus.pop(childPid, None)
 
-        # Calculate and save burst time to history
         total_executed = processExecutedTime.get(childPid, 0.0)
         if childPid in processStartTime:
             total_executed += time.time() - processStartTime[childPid]
 
-        # Get arrival time for learning
         arrival_time = processArrivalTime.get(childPid, time.time())
 
-        # Learn from this execution (incremental update)
         history_context = list(processExecutionHistory[FUNCTION_HISTORY_KEY])
         
-        # ONLINE LEARNING STEP
         with model_lock:
             features = extract_features(history_context, arrival_time, getattr(online_model, 'last_arrival', 0))
             online_model.learn(features, total_executed)
             online_model.last_arrival = arrival_time
 
-        # Add to history after learning
         processExecutionHistory[FUNCTION_HISTORY_KEY].append(total_executed)
 
-        # Limit history size to prevent memory leak
         if len(processExecutionHistory[FUNCTION_HISTORY_KEY]) > 100:
             processExecutionHistory[FUNCTION_HISTORY_KEY].pop(0)
 
-        # Clean up tracking structures for finished process
         processTimestamps.pop(childPid, None)
         processStartTime.pop(childPid, None)
         processExecutedTime.pop(childPid, None)
@@ -421,26 +382,19 @@ def waitTermination(childPid):
     except Exception as e:
         print(f"Error removing process {childPid}: {e}")
 
-    # PREEMPTION: Check if there's a process with shorter remaining time than running process
     if processQueue:
-        # Clean up stale PIDs from the queue before scheduling
-        # A PID is stale if the process no longer exists (not in /proc/{pid})
         def is_process_alive(pid):
-            """Check if a process is still alive using /proc filesystem."""
             try:
-                # On Linux, /proc/{pid} exists if process is alive
                 return os.path.exists(f"/proc/{pid}")
             except Exception:
                 return False
         
-        # Filter out dead processes from the queue
         original_queue_size = len(processQueue)
         processQueue[:] = [
             (remaining_time, pid) for remaining_time, pid in processQueue
             if pid in mapPIDtoStatus and is_process_alive(pid)
         ]
         
-        # Also clean up mapPIDtoStatus for dead processes
         dead_pids = [pid for pid in mapPIDtoStatus if not is_process_alive(pid)]
         for dead_pid in dead_pids:
             mapPIDtoStatus.pop(dead_pid, None)
@@ -450,19 +404,16 @@ def waitTermination(childPid):
             processArrivalTime.pop(dead_pid, None)
         
         if original_queue_size != len(processQueue):
-            # Rebuild heap after filtering
             try:
                 heapq.heapify(processQueue)
             except Exception:
                 pass
 
     if processQueue:
-        # Sort queue based on 1 / remaining_time for SRTF
         def priority_selector(process_item):
             _, pid = process_item
             remaining_time = calculate_remaining_time(pid) + 1e-9
 
-            # Calculate individual wait time
             if pid in processTimestamps:
                 acc_wait, last_wait = processTimestamps[pid]
                 individual_wait_time = acc_wait + \
@@ -470,21 +421,17 @@ def waitTermination(childPid):
             else:
                 individual_wait_time = 0
 
-            # Calculate dynamic beta
             total_wait_time = calculate_total_wait_time(processQueue)
             dynamic_beta = calculate_dynamic_beta(
                 total_wait_time, len(processQueue))
 
-            # Alpha for remaining time (inverse priority)
             alpha = 0.8
 
-            # Priority calculation
             priority = (alpha * (1 / (remaining_time + 1e-9))) + \
                 (dynamic_beta * individual_wait_time)
 
             return priority
 
-        # Get process with highest priority
         next_process_candidates = sorted(
             processQueue, key=priority_selector, reverse=True)
 
@@ -492,37 +439,30 @@ def waitTermination(childPid):
             _, nextProcess = next_process_candidates[0]
             current_running_pid = None
 
-            # Find currently running process
             for pid, status in mapPIDtoStatus.items():
                 if status == "running":
                     current_running_pid = pid
                     break
 
-            # If there's a running process, check if it should be preempted
             if current_running_pid:
                 current_remaining = calculate_remaining_time(
                     current_running_pid)
                 next_remaining = calculate_remaining_time(nextProcess)
 
-                # PREEMPTION CHECK
                 if next_remaining < current_remaining - PREEMPTION_THRESHOLD:
                     print(f"Preempting process {current_running_pid} (remaining: {current_remaining:.2f}s) "
                           f"with process {nextProcess} (remaining: {next_remaining:.2f}s)")
 
-                    # Stop running process
                     try:
-                        # Before SIGTSTP, accumulate elapsed time
                         if current_running_pid in processStartTime:
                             elapsed_since_start = time.time(
                             ) - processStartTime[current_running_pid]
                             processExecutedTime[current_running_pid] = processExecutedTime.get(
                                 current_running_pid, 0) + elapsed_since_start
                             processStartTime.pop(current_running_pid, None)
-                        # Use SIGTSTP instead of SIGSTOP so child can block it during response sending
                         os.kill(current_running_pid, signal.SIGTSTP)
                         mapPIDtoStatus[current_running_pid] = "waiting"
 
-                        # Set last_wait_start (keep accumulated if any)
                         acc_w, _ = processTimestamps.get(
                             current_running_pid, (0.0, None))
                         processTimestamps[current_running_pid] = (
@@ -538,12 +478,10 @@ def waitTermination(childPid):
                         print(
                             f"Error stopping process {current_running_pid}: {e}")
 
-            # Run process with highest priority
             removed = False
             for i, item in enumerate(processQueue):
                 if item[1] == nextProcess:
                     processQueue.pop(i)
-                    # Rebuild heap
                     try:
                         heapq.heapify(processQueue)
                     except Exception:
@@ -551,7 +489,6 @@ def waitTermination(childPid):
                     removed = True
                     break
             if not removed:
-                # Fallback: leave queue intact (entry might not exist anymore)
                 pass
 
             if nextProcess in mapPIDtoStatus:
@@ -561,24 +498,20 @@ def waitTermination(childPid):
                     os.kill(nextProcess, signal.SIGCONT)
                     now = time.time()
 
-                    # Before resuming, accumulate wait segment into acc_wait and clear last_wait_start
                     acc_w, last_wait = processTimestamps.get(
                         nextProcess, (0.0, None))
                     if last_wait:
                         acc_w += now - last_wait
                     processTimestamps[nextProcess] = (acc_w, None)
 
-                    # Reset execution start time
                     processStartTime[nextProcess] = now
                 except ProcessLookupError:
-                    # This handles the specific race condition where the process is gone
                     print(
                         f"Scheduler: Process {nextProcess} disappeared before it could be resumed.")
-                    mapPIDtoStatus.pop(nextProcess, None)  # Clean up
+                    mapPIDtoStatus.pop(nextProcess, None)
                 except Exception as e:
                     print(f"Error resuming process {nextProcess}: {e}")
             else:
-                # This handles the case where the process was already cleaned up but its PID was still in the queue
                 print(
                     f"Scheduler: Stale PID {nextProcess} found in queue, skipping.")
 
@@ -617,8 +550,6 @@ def performIO(clientSocket_):
 
     lockPIDMap.acquire()
     mapPIDtoStatus[blockedID] = "blocked"
-    # Mark blocked: accumulate running time before blocking so accounting stays correct
-    # (do this while holding lock)
     if blockedID in processStartTime:
         elapsed = time.time() - processStartTime[blockedID]
         processExecutedTime[blockedID] = processExecutedTime.get(
@@ -628,9 +559,7 @@ def performIO(clientSocket_):
         if child in mapPIDtoStatus:
             if mapPIDtoStatus[child] == "waiting":
                 mapPIDtoStatus[child] = "running"
-                # Remove any queued entries for this pid (heapq/queue may contain tuple entries)
                 try:
-                    # Safe linear scan remove (queue is small)
                     for i, item in enumerate(processQueue):
                         if item[1] == child:
                             processQueue.pop(i)
@@ -638,7 +567,6 @@ def performIO(clientSocket_):
                             break
                 except Exception:
                     pass
-                # Accumulate wait segment -> clear last_wait, set start time
                 now = time.time()
                 acc_w, last_wait = processTimestamps.get(child, (0.0, None))
                 if last_wait:
@@ -695,14 +623,12 @@ def performIO(clientSocket_):
         proc_path = os.path.join(TMP_DIR, proc_blob_name)
         tmp_proc_path = proc_path + ".part"
         try:
-            # Write to temp, flush and sync, then atomically move into place
             with open(tmp_proc_path, "wb") as my_blob:
                 my_blob.write(blob_val)
                 my_blob.flush()
                 os.fsync(my_blob.fileno())
             os.replace(tmp_proc_path, proc_path)
         except Exception:
-            # Best-effort cleanup on failure
             try:
                 if os.path.exists(tmp_proc_path):
                     os.remove(tmp_proc_path)
@@ -717,7 +643,7 @@ def performIO(clientSocket_):
         blob_val = "none"
 
     lockPIDMap.acquire()
-    numRunning = 0  # Number of running processes
+    numRunning = 0
     for child in mapPIDtoStatus.copy():
         if mapPIDtoStatus[child] == "running":
             numRunning += 1
@@ -776,7 +702,6 @@ def IOThread():
 
 
 def handle_client_connection(clientSocket, address):
-    """Handle a single client connection in a separate thread"""
     global requestQueue
     global mapPIDtoStatus
     global numCores
@@ -791,7 +716,6 @@ def handle_client_connection(clientSocket, address):
         data_ += clientSocket.recv(1024)
         dataStr = data_.decode('UTF-8')
 
-        # Check for Host header
         if 'Host' not in dataStr:
             msg = 'OK'
             response_headers = {
@@ -814,7 +738,6 @@ def handle_client_connection(clientSocket, address):
                 clientSocket.close()
             return
 
-        # Parse message
         while True:
             dataStrList = dataStr.splitlines()
             message = None
@@ -827,7 +750,6 @@ def handle_client_connection(clientSocket, address):
 
         responseFlag = False
 
-        # Handle numCores, Q, Clear messages
         if message != None:
             if "numCores" in message:
                 numCores = int(message["numCores"])
@@ -850,9 +772,7 @@ def handle_client_connection(clientSocket, address):
                 responseFlag = True
             elif "Clear" in message:
                 responseMapWindows = []
-                # Reset execution history for round separation
                 processExecutionHistory[FUNCTION_HISTORY_KEY] = []
-                # Reset model to fresh state
                 with model_lock:
                     global online_model
                     online_model = OnlineLSTMManager(seq_len=2)
@@ -881,16 +801,12 @@ def handle_client_connection(clientSocket, address):
                 clientSocket.close()
             return
 
-        # Record arrival time for this request
         arrival_time = time.time()
 
-        # Get burst time prediction
         estimated_burst_time = get_burst_time_prediction()
 
-        # A status mark of whether the process can run based on the free resources
         waitForRunning = False
 
-        # The processes are running
         numIsRunning = 0
 
         lockPIDMap.acquire()
@@ -898,7 +814,7 @@ def handle_client_connection(clientSocket, address):
             if mapPIDtoStatus[child] == "running":
                 numIsRunning += 1
         if numIsRunning >= numCores:
-            waitForRunning = True  # The process need to wait for resources
+            waitForRunning = True
 
         # Slide windows
         if len(responseMapWindows) >= 100:
@@ -906,26 +822,19 @@ def handle_client_connection(clientSocket, address):
 
         childProcess = os.fork()
         if childProcess == 0:
-            # Child process: run the function and exit
             myFunction(data_, clientSocket, arrival_time)
             os._exit(os.EX_OK)
         else:
-            # Append submit time to the responseMapWindows
             responseMapWindows.append([childProcess, [time.time(), -1]])
             processStartTime[childProcess] = time.time()
-            # Store arrival time for learning
             processArrivalTime[childProcess] = arrival_time
 
-            # Store (accumulated_wait_seconds, last_wait_start_timestamp_or_None)
             processTimestamps[childProcess] = (0.0, None)
 
             if waitForRunning:
-                # If there is no free resources (cpu core) for the process to run, then we set the childprocess to sleep.
                 mapPIDtoStatus[childProcess] = "waiting"
-                # Use SIGTSTP instead of SIGSTOP so child can block it during response
                 os.kill(childProcess, signal.SIGTSTP)
 
-                # Push to priority queue (using burstTime for SRTF logic)
                 heapq.heappush(
                     processQueue, (estimated_burst_time, childProcess))
 
@@ -938,18 +847,13 @@ def handle_client_connection(clientSocket, address):
 
             lockPIDMap.release()
 
-            # Monitor child termination in separate thread
             threadWait = threading.Thread(
                 target=waitTermination, args=(childProcess,))
             threadWait.daemon = True
             threadWait.start()
-            
-            # Parent should NOT close the socket - child process owns it now
-            # The child will close it after sending the response in myFunction()
 
     except Exception as e:
         print(f"Error handling client {address}: {e}", flush=True)
-        # Only close socket on error (child wasn't forked successfully)
         try:
             clientSocket.close()
         except:
