@@ -123,7 +123,7 @@ _burst_time_cache = {
 
 # The function to update the core nums by request.
 def updateThread():
-    # Shared vaiable: numCores
+    # Shared variable: numCores
     global numCores
 
     # Bind to 0.0.0.0:5500
@@ -222,7 +222,7 @@ def myFunction(data_, clientSocket_, arrival_time):
     r = '%s %s %s\r\n' % (response_proto, response_status,
                           response_status_text)
     
-    # CRITICAL SECTION: Block SIGTSTP during response sending to prevent
+    # Block SIGTSTP during response sending to prevent
     # preemption from interrupting socket writes and causing connection errors
     try:
         # Block SIGTSTP to prevent preemption during response sending
@@ -260,10 +260,6 @@ def train_models(history):
 
 
 def get_burst_time_prediction():
-    """
-    Get or calculate burst time prediction with caching.
-    Only retrains when history changes.
-    """
     global _burst_time_cache
     
     history = processExecutionHistory[FUNCTION_HISTORY_KEY]
