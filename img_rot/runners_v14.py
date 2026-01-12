@@ -112,11 +112,11 @@ responseMapWindows = []  # map from pid to response
 
 affinity_mask = {0, 1, 2, 3, 4, 5, 6, 7}
 
-# LSTM Model Cache (to avoid retraining on every call)
+# LSTM Model
 lstm_model = None
 lstm_model_lock = threading.Lock()
-lstm_sequence_length = 3  # CHANGED: Reduced from 10 to 3 - works with small datasets
-lstm_min_samples = 5      # CHANGED: Added minimum samples before LSTM kicks in
+lstm_sequence_length = 3
+lstm_min_samples = 5
 
 def build_lstm_model(input_shape):
     """
@@ -127,10 +127,10 @@ def build_lstm_model(input_shape):
     from tensorflow.keras.optimizers import Adam
 
     model = Sequential([
-        LSTM(8, activation='relu', input_shape=input_shape,  # Reduced from 16 to 8
+        LSTM(8, activation='relu', input_shape=input_shape,
              return_sequences=False),
-        Dropout(0.1),  # Reduced from 0.2 to 0.1
-        Dense(4, activation='relu'),  # Reduced from 8 to 4
+        Dropout(0.1),
+        Dense(4, activation='relu'),
         Dense(1, activation='relu')
     ])
     model.compile(optimizer=Adam(learning_rate=0.01), loss='mse')
@@ -138,13 +138,8 @@ def build_lstm_model(input_shape):
 
 
 def train_lstm_model(history):
-    """
-    Train LSTM model on execution history.
-    OPTIMIZED for small datasets (20-100 samples).
-    """
     global lstm_model
 
-    # CHANGED: Use smaller sequence length
     if len(history) < lstm_sequence_length + 1:
         return None  # Not enough data
 
@@ -187,9 +182,6 @@ def train_lstm_model(history):
 
 
 def predict_lstm(model, history):
-    """
-    Use LSTM model to predict the next execution time.
-    """
     if model is None or len(history) < lstm_sequence_length:
         return None
 
@@ -219,7 +211,7 @@ def predict_lstm(model, history):
 
 # The function to update the core nums by request.
 def updateThread():
-    # Shared vaiable: numCores
+    # Shared variable: numCores
     global numCores
 
     # Bind to 0.0.0.0:5500
@@ -318,7 +310,7 @@ def myFunction(data_, clientSocket_, arrival_time):
     r = '%s %s %s\r\n' % (response_proto, response_status,
                           response_status_text)
     
-    # CRITICAL SECTION: Block SIGTSTP during response sending to prevent
+    # Block SIGTSTP during response sending to prevent
     # preemption from interrupting socket writes and causing connection errors
     try:
         # Block SIGTSTP to prevent preemption during response sending
@@ -361,7 +353,6 @@ def get_burst_time_prediction_lstm():
     if not history:
         return 2.0  # Default if no history
 
-    # CHANGED: More aggressive LSTM training (retrain every 5 samples instead of 10)
     if len(history) >= lstm_min_samples:
         with lstm_model_lock:
             # Retrain every 5 samples OR if model doesn't exist
@@ -371,7 +362,6 @@ def get_burst_time_prediction_lstm():
         if lstm_model is not None:
             lstm_pred = predict_lstm(lstm_model, history)
             if lstm_pred is not None and lstm_pred > 0:
-                # CHANGED: Blend LSTM with EWMA for robustness
                 ewma_pred = calculate_ewma(history)
                 # 70% LSTM, 30% EWMA for stability
                 blended_pred = 0.7 * lstm_pred + 0.3 * ewma_pred
@@ -397,12 +387,7 @@ BETA_RT = 0.3   # Faktor penalti standar deviasi
 
 # Fungsi Menghitung Remaining Time
 def calculate_remaining_time(pid):
-    """
-    Calculate remaining time using LSTM prediction.
-    Uses processExecutedTime to properly track accumulated execution time.
-    """
-    # Get prediction from LSTM model (centralized prediction logic)
-    estimated_burst_time = get_burst_time_prediction_lstm()  # or just reuse the name
+    estimated_burst_time = get_burst_time_prediction_lstm()
     
     # Calculate elapsed time using processExecutedTime (accumulated) + current running segment
     elapsed_time = processExecutedTime.get(pid, 0)
